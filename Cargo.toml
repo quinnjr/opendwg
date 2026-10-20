@@ -1,0 +1,29 @@
+[package]
+name = "opendwg"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Pure-Rust reader and writer for AutoCAD DWG files: reads AutoCAD 2000-2018 (AC1015-AC1032), writes AutoCAD 2018"
+# repository: not set yet (the project has no public remote); add its URL
+# before publishing.
+readme = "README.md"
+keywords = ["dwg", "autocad", "cad", "drawing", "file-format"]
+categories = ["parser-implementations", "encoding", "graphics"]
+# Test-only data (sample drawings and fixtures copied from them) is not
+# published: see THIRD_PARTY.md.
+exclude = ["corpus/", "fuzz/", "src/object/testdata/", "src/section/testdata/", ".superpowers/", ".worktrees/"]
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+encoding_rs = "0.8"
+thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+proptest = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "1.1.8"
+serde_json = { version = "1", features = ["float_roundtrip"] }

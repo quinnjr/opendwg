@@ -1,0 +1,441 @@
+//! The reverse reference index behind [`Drawing::referrers`] and
+//! [`Drawing::remove`].
+//!
+//! An object's references are those its type-specific data writes and an
+//! entity's common data writes besides its ownership links (both found by
+//! encoding with a recording writer, see [`crate::object::type_refs`] and
+//! [`crate::object::entity_common_refs`]), the handle items of an XRECORD
+//! (stored in its data; 480-481 items as text), and the application and
+//! handle items of its extended data. Owner, reactors and extension
+//! dictionary are ownership links; reactors are indexed separately.
+//!
+//! The index is built once, on first use, in one pass over the objects. After
+//! that it is kept up to date incrementally: the mutation methods add and
+//! drop the references they change (list entries directly, other changed
+//! objects by recomputing their references), and [`Drawing::get_mut`] marks
+//! its object dirty, so only that object is recomputed at the next use.
+//!
+//! [`Drawing::referrers`]: super::Drawing::referrers
+//! [`Drawing::remove`]: super::Drawing::remove
+//! [`Drawing::get_mut`]: super::Drawing::get_mut
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+#[cfg(doc)]
+use super::Drawing;
+use crate::handle::Handle;
+use crate::object::objects::{handle_text_is_reference, parse_handle_text};
+use crate::object::tables::{HARD_OWNER, HARD_POINTER, SOFT_OWNER, SOFT_POINTER};
+use crate::object::{
+    AcisPayload, Entity, NonGraphical, Object, XDataItem, XRecordValue, entity_common_refs,
+    type_refs,
+};
+
+/// The references of `obj` (target, reference code), without null handles
+/// and references to itself, and whether the list is complete. It is not when
+/// the data cannot be encoded as R2018, except for an ACIS entity read
+/// before R2013 (the encoder refuses it alone, before writing the history,
+/// the entity's one reference, which is added here). ACIS data storage
+/// records are keyed by handle but are not references: the writer drops
+/// those of entities gone.
+pub(crate) fn object_refs(obj: &Object) -> (Vec<(Handle, u8)>, bool) {
+    // An object whose common data could not be read refers to nothing the
+    // drawing can know of; it is never written (see `UnreadableObject`).
+    if let Object::Other {
+        object: NonGraphical::Unreadable(_),
+        ..
+    } = obj
+    {
+        return (Vec::new(), true);
+    }
+    let (mut refs, result) = type_refs(obj);
+    let mut complete = result.is_ok();
+    if let Object::Entity { common, entity } = obj {
+        if let Entity::Acis(a) = entity {
+            if !matches!(a.payload, AcisPayload::DataStorage { .. }) {
+                refs.extend(a.history.map(|h| (h, HARD_OWNER)));
+                complete = true;
+            }
+        }
+        let (common_refs, result) = entity_common_refs(common);
+        refs.extend(common_refs);
+        complete &= result.is_ok();
+    }
+    if let Object::Other {
+        object: NonGraphical::XRecord(x),
+        ..
+    } = obj
+    {
+        // Handle items are stored in the data, not as references: 330-369
+        // and 390-399 as handles, 480-481 as hexadecimal text.
+        refs.extend(x.items.iter().filter_map(|(code, value)| match value {
+            XRecordValue::ObjectId(h) => Some((*h, xrecord_ref_code(*code))),
+            XRecordValue::HandleText(s) if handle_text_is_reference(*code) => {
+                Some((parse_handle_text(s)?, xrecord_ref_code(*code)))
+            }
+            _ => None,
+        }));
+    }
+    for app in &obj.object_common().xdata {
+        refs.push((app.app, SOFT_POINTER));
+        refs.extend(app.items.iter().filter_map(|item| match item {
+            XDataItem::LayerRef(h) | XDataItem::Handle(h) => Some((*h, SOFT_POINTER)),
+            _ => None,
+        }));
+    }
+    let own = obj.handle();
+    refs.retain(|&(t, _)| t.0 != 0 && t != own);
+    (refs, complete)
+}
+
+/// The reference code a DXF group code's handle stands for: 330-339 soft
+/// pointer, 340-349, 390-399 and 480-481 hard pointer, 350-359 soft owner,
+/// 360-369 hard owner; any other (1005-1009) a soft pointer. 320-329 items
+/// (arbitrary handles, not translated) are not references.
+fn xrecord_ref_code(group: i16) -> u8 {
+    match group {
+        340..=349 | 390..=399 | 480..=481 => HARD_POINTER,
+        350..=359 => SOFT_OWNER,
+        360..=369 => HARD_OWNER,
+        _ => SOFT_POINTER,
+    }
+}
+
+/// One object's outgoing links in the index.
+#[derive(Debug, Clone, Default)]
+struct Node {
+    refs: Vec<(Handle, u8)>,
+    reactors: Vec<Handle>,
+}
+
+/// Who refers to whom.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RefIndex {
+    nodes: HashMap<Handle, Node>,
+    /// For each referenced object, its referrers in handle order, with the
+    /// codes of their references to it.
+    referrers: HashMap<Handle, BTreeMap<Handle, Vec<u8>>>,
+    /// For each object, the objects that list it among their reactors.
+    reactor_holders: HashMap<Handle, BTreeSet<Handle>>,
+    /// Objects whose references cannot all be listed (see [`object_refs`]).
+    incomplete: BTreeSet<Handle>,
+}
+
+impl RefIndex {
+    /// The referrers of `h` with their reference codes, in handle order.
+    pub(crate) fn referrers(&self, h: Handle) -> impl Iterator<Item = (Handle, &[u8])> {
+        self.referrers
+            .get(&h)
+            .into_iter()
+            .flatten()
+            .map(|(&r, codes)| (r, codes.as_slice()))
+    }
+
+    /// The objects listing `h` among their reactors.
+    pub(crate) fn reactor_holders(&self, h: Handle) -> impl Iterator<Item = Handle> {
+        self.reactor_holders.get(&h).into_iter().flatten().copied()
+    }
+
+    /// The references of `h` as indexed.
+    pub(crate) fn refs_of(&self, h: Handle) -> &[(Handle, u8)] {
+        self.nodes.get(&h).map_or(&[], |n| n.refs.as_slice())
+    }
+
+    pub(crate) fn incomplete(&self) -> impl Iterator<Item = Handle> {
+        self.incomplete.iter().copied()
+    }
+
+    /// Whether the references of `h` could not all be listed.
+    pub(crate) fn is_incomplete(&self, h: Handle) -> bool {
+        self.incomplete.contains(&h)
+    }
+
+    /// Whether `holder` lists `r` among its reactors.
+    pub(crate) fn holds_reactor(&self, holder: Handle, r: Handle) -> bool {
+        self.reactor_holders
+            .get(&r)
+            .is_some_and(|s| s.contains(&holder))
+    }
+
+    /// Whether `from` refers to `to` (with any code).
+    pub(crate) fn refers(&self, from: Handle, to: Handle) -> bool {
+        self.referrers
+            .get(&to)
+            .is_some_and(|m| m.contains_key(&from))
+    }
+
+    /// Everything indexed, in a canonical order (codes sorted), to compare
+    /// an index kept up to date with one built afresh.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn snapshot(
+        &self,
+    ) -> (
+        BTreeMap<Handle, BTreeMap<Handle, Vec<u8>>>,
+        BTreeMap<Handle, BTreeSet<Handle>>,
+        BTreeSet<Handle>,
+    ) {
+        let referrers = self
+            .referrers
+            .iter()
+            .map(|(&t, m)| {
+                let m = m
+                    .iter()
+                    .map(|(&r, codes)| {
+                        let mut codes = codes.clone();
+                        codes.sort_unstable();
+                        (r, codes)
+                    })
+                    .collect();
+                (t, m)
+            })
+            .collect();
+        let holders = self
+            .reactor_holders
+            .iter()
+            .map(|(&r, s)| (r, s.clone()))
+            .collect();
+        (referrers, holders, self.incomplete.clone())
+    }
+
+    /// Index `obj` as object `h` (which must not be indexed).
+    fn insert(&mut self, h: Handle, obj: &Object) {
+        let (refs, complete) = object_refs(obj);
+        if !complete {
+            self.incomplete.insert(h);
+        }
+        for &(t, code) in &refs {
+            self.referrers
+                .entry(t)
+                .or_default()
+                .entry(h)
+                .or_default()
+                .push(code);
+        }
+        let reactors = obj.object_common().reactors.clone();
+        for &r in &reactors {
+            self.reactor_holders.entry(r).or_default().insert(h);
+        }
+        self.nodes.insert(h, Node { refs, reactors });
+    }
+
+    /// Drop everything object `h` refers to. References to it stay.
+    pub(crate) fn delete(&mut self, h: Handle) {
+        self.incomplete.remove(&h);
+        let Some(node) = self.nodes.remove(&h) else {
+            return;
+        };
+        for (t, _) in node.refs {
+            self.drop_referrer(t, h);
+        }
+        for r in node.reactors {
+            self.drop_holder(r, h);
+        }
+    }
+
+    fn drop_referrer(&mut self, t: Handle, r: Handle) {
+        if let Some(m) = self.referrers.get_mut(&t) {
+            m.remove(&r);
+            if m.is_empty() {
+                self.referrers.remove(&t);
+            }
+        }
+    }
+
+    fn drop_holder(&mut self, r: Handle, holder: Handle) {
+        if let Some(s) = self.reactor_holders.get_mut(&r) {
+            s.remove(&holder);
+            if s.is_empty() {
+                self.reactor_holders.remove(&r);
+            }
+        }
+    }
+
+    /// `from` now also refers to `to` (a list entry it gained).
+    pub(crate) fn add_edge(&mut self, from: Handle, to: Handle, code: u8) {
+        if let Some(node) = self.nodes.get_mut(&from) {
+            node.refs.push((to, code));
+            self.referrers
+                .entry(to)
+                .or_default()
+                .entry(from)
+                .or_default()
+                .push(code);
+        }
+    }
+
+    /// `from` no longer refers to `to` at all.
+    pub(crate) fn remove_edges(&mut self, from: Handle, to: Handle) {
+        if let Some(node) = self.nodes.get_mut(&from) {
+            node.refs.retain(|&(t, _)| t != to);
+            self.drop_referrer(to, from);
+        }
+    }
+
+    /// `h`'s reactors are now `reactors`.
+    pub(crate) fn set_reactors(&mut self, h: Handle, reactors: &[Handle]) {
+        let Some(node) = self.nodes.get_mut(&h) else {
+            return;
+        };
+        let old = std::mem::replace(&mut node.reactors, reactors.to_vec());
+        for r in old {
+            self.drop_holder(r, h);
+        }
+        for &r in reactors {
+            self.reactor_holders.entry(r).or_default().insert(h);
+        }
+    }
+}
+
+/// The index, whether built, the objects changed through `get_mut` since,
+/// and a count of the objects whose references were computed for it (the
+/// work, for tests).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct IndexState {
+    index: Option<RefIndex>,
+    dirty: HashSet<Handle>,
+    pub(crate) work: usize,
+}
+
+impl IndexState {
+    /// The index, built or brought up to date with `objects` first.
+    pub(crate) fn ensure(&mut self, objects: &BTreeMap<Handle, Object>) -> &mut RefIndex {
+        if self.index.is_none() {
+            let mut index = RefIndex::default();
+            for (&h, obj) in objects {
+                index.insert(h, obj);
+            }
+            self.work += objects.len();
+            self.dirty.clear();
+            self.index = Some(index);
+        }
+        let index = self.index.get_or_insert_with(RefIndex::default);
+        for h in self.dirty.drain() {
+            index.delete(h);
+            if let Some(obj) = objects.get(&h) {
+                index.insert(h, obj);
+                self.work += 1;
+            }
+        }
+        index
+    }
+
+    /// Bring the index up to date (recompute the objects changed through
+    /// `get_mut`) if it was built; a mutation calls this before changing
+    /// anything.
+    pub(crate) fn sync(&mut self, objects: &BTreeMap<Handle, Object>) {
+        if self.index.is_some() {
+            self.ensure(objects);
+        }
+    }
+
+    /// Index the new objects `new` and the list entries `edges` (from, to,
+    /// code) other objects gained, if the index was built. The rest of the
+    /// index must be up to date (see [`IndexState::sync`]).
+    pub(crate) fn added(
+        &mut self,
+        objects: &BTreeMap<Handle, Object>,
+        new: &[Handle],
+        edges: &[(Handle, Handle, u8)],
+    ) {
+        let Some(index) = &mut self.index else {
+            return;
+        };
+        for &h in new {
+            if let Some(obj) = objects.get(&h) {
+                index.insert(h, obj);
+                self.work += 1;
+            }
+        }
+        for &(from, to, code) in edges {
+            index.add_edge(from, to, code);
+        }
+    }
+
+    /// The built index, if any.
+    pub(crate) fn index_mut(&mut self) -> Option<&mut RefIndex> {
+        self.index.as_mut()
+    }
+
+    /// Recompute the references of `h` (gone from `objects` if removed).
+    pub(crate) fn refresh(&mut self, objects: &BTreeMap<Handle, Object>, h: Handle) {
+        if let Some(index) = &mut self.index {
+            index.delete(h);
+            if let Some(obj) = objects.get(&h) {
+                index.insert(h, obj);
+                self.work += 1;
+            }
+        }
+    }
+
+    pub(crate) fn mark_dirty(&mut self, h: Handle) {
+        if self.index.is_some() {
+            self.dirty.insert(h);
+        }
+    }
+}
+
+/// [`IndexState`] behind a lock, so that `&self` queries can build it.
+#[derive(Debug, Default)]
+pub(crate) struct IndexCell(Mutex<IndexState>);
+
+impl IndexCell {
+    /// The state. A lock poisoned by a panic while the index was being
+    /// changed may hold a half-updated index: it is dropped, to be rebuilt.
+    pub(crate) fn lock(&self) -> MutexGuard<'_, IndexState> {
+        self.0.lock().unwrap_or_else(|poisoned| {
+            self.0.clear_poison();
+            let mut state = poisoned.into_inner();
+            *state = IndexState::default();
+            state
+        })
+    }
+
+    /// The state, to change; a poisoned one is dropped as in
+    /// [`IndexCell::lock`].
+    pub(crate) fn get_mut(&mut self) -> &mut IndexState {
+        if self.0.is_poisoned() {
+            self.0.clear_poison();
+            *self.0.get_mut().unwrap_or_else(PoisonError::into_inner) = IndexState::default();
+        }
+        self.0.get_mut().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Clone for IndexCell {
+    fn clone(&self) -> Self {
+        IndexCell(Mutex::new(self.lock().clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panic while the lock is held drops the index rather than keep a
+    /// possibly half-updated one; both accessors recover.
+    #[test]
+    fn poisoned_index_is_dropped() {
+        let poison = |cell: &IndexCell| {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut state = cell.lock();
+                state.work = 7;
+                state.index = Some(RefIndex::default());
+                panic!("while updating the index");
+            }));
+            assert!(result.is_err());
+            assert!(cell.0.is_poisoned());
+        };
+        let cell = IndexCell::default();
+        poison(&cell);
+        let state = cell.lock();
+        assert!(state.index.is_none() && state.work == 0);
+        drop(state);
+        assert!(!cell.0.is_poisoned());
+        let mut cell = IndexCell::default();
+        poison(&cell);
+        let state = cell.get_mut();
+        assert!(state.index.is_none() && state.work == 0);
+    }
+}

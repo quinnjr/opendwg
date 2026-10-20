@@ -1,0 +1,119 @@
+[package]
+name = "opendwg-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.opendwg]
+path = ".."
+
+[[bin]]
+name = "read_drawing"
+path = "fuzz_targets/read_drawing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "write_roundtrip"
+path = "fuzz_targets/write_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bitreader"
+path = "fuzz_targets/bitreader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lz77_2004"
+path = "fuzz_targets/lz77_2004.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lz77_2007"
+path = "fuzz_targets/lz77_2007.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rs2007"
+path = "fuzz_targets/rs2007.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proxy_graphics"
+path = "fuzz_targets/proxy_graphics.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "objmap"
+path = "fuzz_targets/objmap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "acds"
+path = "fuzz_targets/acds.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "header"
+path = "fuzz_targets/header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "classes"
+path = "fuzz_targets/classes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "summaryinfo"
+path = "fuzz_targets/summaryinfo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "preview"
+path = "fuzz_targets/preview.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container"
+path = "fuzz_targets/container.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "object"
+path = "fuzz_targets/object.rs"
+test = false
+doc = false
+bench = false
