@@ -50,6 +50,9 @@
 //!     ([`crate::object::AcisEntity::to_r2013`]): its SAB moves to a data
 //!     storage record keyed by its handle, and it gets a GUID derived from
 //!     $FINGERPRINTGUID and its handle ([`AcisGuid::derived`]).
+//!   - an object listed as owned (an extension dictionary, an entry of a
+//!     hard-owner dictionary) that stores a null owner gets its lister as
+//!     owner, with a warning (AutoCAD 2002's R14 round-trip data);
 //!   - `has_ds_binary_data` in each object's common data, derived: set
 //!     exactly on the objects with a record in the data storage section as
 //!     written (a converted ACIS entity gets it, an emptied one loses it).
@@ -436,6 +439,7 @@ impl Drawing {
                 .into_iter()
                 .filter_map(|(_, r)| r.err()),
         );
+        diags.extend(self.null_owners().into_iter().map(|(_, _, w)| w));
         let mut header = self.header.clone();
         header.handseed = self.next_handseed();
         let summary_len = self
@@ -774,7 +778,61 @@ impl Drawing {
         self.refresh_block_inserts(&mut changes);
         self.refresh_attdef_flags(&mut changes);
         self.refresh_plot_views(&mut changes);
+        self.refresh_null_owners(&mut changes);
         changes
+    }
+
+    /// The objects listed as owned that store a null owner, with their
+    /// lister and a warning: an extension dictionary, an entry of a
+    /// hard-owner dictionary. AutoCAD 2002 and 2004 wrote a DIMSTYLE's R14
+    /// round-trip extension dictionary and its XRECORD so (`arx-02`,
+    /// `arx-03` of the extended corpus).
+    fn null_owners(&self) -> Vec<(Handle, Handle, Diagnostic)> {
+        let null = |h: Handle| matches!(self.objects.get(&h), Some(Object::Other { common, .. }) if common.owner.0 == 0);
+        let name = |h: Handle| {
+            self.objects
+                .get(&h)
+                .map_or_else(|| h.to_string(), |o| format!("{} {h}", o.type_name()))
+        };
+        let mut out: Vec<(Handle, Handle, Diagnostic)> = Vec::new();
+        let mut seen = HashSet::new();
+        for (&h, obj) in &self.objects {
+            let mut listed = Vec::new();
+            if let Some(x) = obj.object_common().xdict {
+                listed.push((x, "its extension dictionary"));
+            }
+            if let Object::Other {
+                object: NonGraphical::Dictionary(d),
+                ..
+            } = obj
+            {
+                if d.is_hard_owner() {
+                    listed.extend(d.entries.iter().map(|&(_, e)| (e, "an entry")));
+                }
+            }
+            for (child, how) in listed {
+                if child != h && null(child) && seen.insert(child) {
+                    let message = format!(
+                        "{}: its owner is null, but {} lists it as {how}; it is written with \
+                         that owner",
+                        name(child),
+                        name(h)
+                    );
+                    out.push((child, h, warning(Some(child), message)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Set the null owners [`Drawing::null_owners`] finds (step 2).
+    fn refresh_null_owners(&self, changes: &mut Changes) {
+        for (child, owner, w) in self.null_owners() {
+            if let Some(obj) = changes.edit(self, child) {
+                obj.object_common_mut().owner = owner;
+                changes.warnings.push(w);
+            }
+        }
     }
 
     /// The layouts and plot settings that name a plot view (R2000) and have
@@ -2672,6 +2730,46 @@ mod tests {
         assert!(w[0].message.contains("Nowhere") && w[0].message.contains(&name));
         assert_eq!(d.write_diagnostics(), diags);
         assert_eq!(written_plot_view(&bytes, layout), Handle(0));
+    }
+
+    /// An extension dictionary and a hard-owner dictionary's entry that
+    /// store a null owner (AutoCAD 2002's R14 round-trip dictionary of a
+    /// DIMSTYLE and its XRECORD: `arx-02` of the extended corpus) are
+    /// written with their lister as owner, with a warning each.
+    #[test]
+    fn null_owners_of_listed_objects_are_set() {
+        let mut d = Drawing::new();
+        let layers = d.header.layer_control;
+        let xdict = d.get(layers).unwrap().object_common().xdict.unwrap();
+        let Some(Object::Other {
+            object: NonGraphical::Dictionary(x),
+            ..
+        }) = d.get(xdict)
+        else {
+            panic!("an extension dictionary");
+        };
+        assert!(x.is_hard_owner());
+        let (_, states) = x.entries[0].clone();
+        for h in [xdict, states] {
+            d.get_mut(h).unwrap().object_common_mut().owner = Handle(0);
+        }
+        let diags = d.validate();
+        assert!(
+            diags.iter().all(|x| x.severity != Severity::Error),
+            "{diags:#?}"
+        );
+        let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+        let named: Vec<Option<Handle>> = warnings
+            .iter()
+            .filter(|w| w.message.contains("null"))
+            .map(|w| w.handle)
+            .collect();
+        assert_eq!(named, [Some(xdict), Some(states)], "{warnings:#?}");
+        let back = Drawing::from_bytes(&bytes).unwrap();
+        assert_eq!(back.get(xdict).unwrap().object_common().owner, layers);
+        assert_eq!(back.get(states).unwrap().object_common().owner, xdict);
+        assert!(back.validate().is_empty(), "{:#?}", back.validate());
+        assert_eq!(d.get(xdict).unwrap().object_common().owner, Handle(0));
     }
 
     #[test]
