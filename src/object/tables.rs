@@ -975,7 +975,9 @@ pub struct View {
     pub visual_style: Handle,
     /// R2007+ sun (hard owner).
     pub sun: Handle,
+    /// The UCS's base UCS (hard pointer): stored only with a `ucs`.
     pub base_ucs: Handle,
+    /// The named UCS (hard pointer): stored only with a `ucs`.
     pub named_ucs: Handle,
     /// R2007+ live section (soft pointer).
     pub live_section: Handle,
@@ -1009,8 +1011,13 @@ impl View {
         } else {
             (Handle(0), Handle(0), Handle(0))
         };
-        let base_ucs = r.href_abs()?;
-        let named_ucs = r.href_abs()?;
+        // Only a view with a UCS stores the UCS handles (ODS 20.4.60;
+        // AutoCAD 2025's views without one in `adsk-house-01`).
+        let (base_ucs, named_ucs) = if ucs.is_some() {
+            (r.href_abs()?, r.href_abs()?)
+        } else {
+            (Handle(0), Handle(0))
+        };
         let live_section = if r2007 { r.href_abs()? } else { Handle(0) };
         Ok(View {
             entry,
@@ -1061,8 +1068,10 @@ impl View {
         put(w, SOFT_POINTER, self.background)?;
         put(w, HARD_POINTER, self.visual_style)?;
         put(w, HARD_OWNER, self.sun)?;
-        put(w, HARD_POINTER, self.base_ucs)?;
-        put(w, HARD_POINTER, self.named_ucs)?;
+        if self.ucs.is_some() {
+            put(w, HARD_POINTER, self.base_ucs)?;
+            put(w, HARD_POINTER, self.named_ucs)?;
+        }
         put(w, SOFT_POINTER, self.live_section)
     }
 }
@@ -2340,8 +2349,23 @@ mod tests {
             live_section: Handle(0x74),
         };
         roundtrip(&v, View::encode, View::decode, type_code::VIEW);
-        let no_ucs = View { ucs: None, ..v };
+        // Without a UCS the UCS handles are not stored (AutoCAD 2025's
+        // views in `adsk-house-01` of the extended corpus).
+        let no_ucs = View {
+            ucs: None,
+            base_ucs: Handle(0),
+            named_ucs: Handle(0),
+            ..v
+        };
         roundtrip(&no_ucs, View::encode, View::decode, type_code::VIEW);
+        let stale = View {
+            base_ucs: Handle(0x72),
+            ..no_ucs.clone()
+        };
+        assert_eq!(
+            encoded(&stale, View::encode, type_code::VIEW),
+            encoded(&no_ucs, View::encode, type_code::VIEW)
+        );
     }
 
     #[test]
