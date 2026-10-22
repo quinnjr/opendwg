@@ -366,7 +366,11 @@ impl BlockRecord {
         let is_xref = r.data.read_b()?;
         let xref_overlaid = r.data.read_b()?;
         let xref_unloaded = r.data.read_b()?;
-        let owned_count = if v >= Version::R2004 {
+        // An xref block owns no entities: from R2004 it stores no owned
+        // object count (ODS has the count always; ACadSharp's
+        // `readBlockHeader` and Civil 3D's xref block in `camber-26` agree).
+        let xref = is_xref || xref_overlaid;
+        let owned_count = if v >= Version::R2004 && !xref {
             Some(r.data.read_bl()?)
         } else {
             None
@@ -399,7 +403,7 @@ impl BlockRecord {
                 let n = handle_count(r, n, "owned entity")?;
                 EntityList::Owned((0..n).map(|_| r.href_abs()).collect::<Result<_>>()?)
             }
-            None if is_xref || xref_overlaid => EntityList::Owned(Vec::new()),
+            None if xref => EntityList::Owned(Vec::new()),
             None => EntityList::Linked {
                 first: r.href_abs()?,
                 last: r.href_abs()?,
@@ -441,14 +445,20 @@ impl BlockRecord {
                 "an R2000 block record's first/last entities must be converted to a list",
             ));
         };
+        let xref = self.is_xref || self.xref_overlaid;
+        if xref && !owned.is_empty() {
+            return Err(encode_err("an xref block record cannot own entities"));
+        }
         self.entry.encode(w)?;
         w.data.write_b(self.anonymous);
         w.data.write_b(self.has_attdefs);
         w.data.write_b(self.is_xref);
         w.data.write_b(self.xref_overlaid);
         w.data.write_b(self.xref_unloaded);
-        w.data
-            .write_bl(encode_count(owned.len(), "owned entities")?);
+        if !xref {
+            w.data
+                .write_bl(encode_count(owned.len(), "owned entities")?);
+        }
         w.data.write_3bd(self.base_point);
         w.text(&self.xref_path)?;
         for _ in &self.inserts {
@@ -1924,7 +1934,7 @@ mod tests {
             anonymous: true,
             has_attdefs: true,
             is_xref: false,
-            xref_overlaid: true,
+            xref_overlaid: false,
             xref_unloaded: true,
             base_point: [1.0, -2.5, 3.0],
             xref_path: "C:\\x.dwg".into(),
@@ -2011,6 +2021,71 @@ mod tests {
             assert_eq!(r.data.remaining_bits(), 0);
             assert!(r.handles.remaining_bits() < 8);
         }
+    }
+
+    /// From R2004 a BLOCK_HEADER stores its owned object count and owned
+    /// entities, but an xref or overlaid xref block stores neither (Civil 3D
+    /// 2023's xref block `Xref01` in `camber-26` of the extended corpus).
+    #[test]
+    fn r2004_xref_block_record_has_no_owned_count() {
+        for (xref, overlaid) in [(false, false), (true, false), (false, true)] {
+            let mut d = BitWriter::new();
+            d.write_tv_raw(b"B").unwrap();
+            d.write_b(true); // 64-flag
+            d.write_bs(0);
+            d.write_b(false);
+            for bit in [false, false, xref, overlaid, false] {
+                d.write_b(bit);
+            }
+            let plain = !xref && !overlaid;
+            if plain {
+                d.write_bl(2);
+            }
+            d.write_3bd([0.0; 3]);
+            d.write_tv_raw(b"x.dwg").unwrap();
+            d.write_rc(1); // one insert
+            d.write_rc(0);
+            d.write_tv_raw(b"").unwrap();
+            d.write_bl(0); // preview
+            let mut hs = BitWriter::new();
+            let mut refs = vec![(5, 0), (3, 0x20)];
+            if plain {
+                refs.extend([(3, 0x30), (3, 0x34)]);
+            }
+            refs.extend([(3, 0x21), (4, 0x99), (5, 0x22)]);
+            for (code, value) in refs {
+                hs.write_handle_ref(HandleRef { code, value }).unwrap();
+            }
+            let bytes = assemble(Version::R2004, type_code::BLOCK_HEADER, &d, None, &hs);
+            let (mut r, _) = ObjReader::split(&bytes, Version::R2004, 30).unwrap();
+            let b = BlockRecord::decode(&mut r).unwrap();
+            let want: &[Handle] = if plain {
+                &[Handle(0x30), Handle(0x34)]
+            } else {
+                &[]
+            };
+            assert_eq!(b.entities, EntityList::Owned(want.to_vec()));
+            assert_eq!((b.is_xref, b.xref_overlaid), (xref, overlaid));
+            assert_eq!(b.xref_path, "x.dwg");
+            assert_eq!(b.end_block, Handle(0x21));
+            assert_eq!(b.inserts, [Handle(0x99)]);
+            assert_eq!(b.layout, Handle(0x22));
+            assert_eq!(r.data.remaining_bits(), 0);
+            assert!(r.handles.remaining_bits() < 8);
+            // Written as R2018 and read back, the same.
+            roundtrip(
+                &b,
+                BlockRecord::encode,
+                BlockRecord::decode,
+                type_code::BLOCK_HEADER,
+            );
+        }
+        // An xref block cannot own entities.
+        let b = BlockRecord {
+            is_xref: true,
+            ..block_record()
+        };
+        assert!(b.encode(&mut ObjWriter::new(H)).is_err());
     }
 
     fn layer() -> Layer {
