@@ -112,10 +112,12 @@ byte for byte) and is pinned by a value test in `tests/hatch_misc.rs`. Used in
 - A proxy's pre-R2018 drawing format holds the version in its low 16 bits.
 Found on the corpus, in neither source: R2013+ ACIS entities end, after the R2007 unknown `BL`,
 with a `B` (DXF 290), the entity's GUID (DXF 2: `BL`, `BS`, `BS`, 8 `RC`) and a 0 read as a `BS`,
-checked against the DXF export. Not in the corpus, so following ODS: ACIS silhouettes (a
-`BL` viewport id and a `BL` wire count; ACadSharp reads a `BLL` and a flag), hatch spline edge fit
-data (start and end tangents always stored from R2010; ACadSharp only after a fit point), the
-OLE2FRAME and ACAD_PROXY_ENTITY layouts (ACadSharp reads an extra text from R2004 in proxies).
+checked against the DXF export. A hatch spline edge stores its R2010+ start and end tangents only
+after a non-zero fit point count, as ACadSharp reads them (ODS: always); confirmed on AutoCAD
+2025's hatch in `acadsharp-svg-export-sample` of the extended corpus. Not in the corpus, so
+following ODS: ACIS silhouettes (a `BL` viewport id and a `BL` wire count; ACadSharp reads a `BLL`
+and a flag), the OLE2FRAME and ACAD_PROXY_ENTITY layouts (ACadSharp reads an extra text from R2004
+in proxies).
 
 ## ACadSharp (MIT) - non-graphical objects and informational sections
 Consulted (not copied), at commit `ed5ff1cf4731c0296bb8931a387bd9d7c634122f`:
