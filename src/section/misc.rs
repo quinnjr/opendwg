@@ -349,18 +349,24 @@ impl Preview {
             return Err(Error::BadSentinel("preview start"));
         }
         let overall = c.u32()?;
-        let end = bytes
-            .len()
-            .checked_sub(16)
-            .filter(|&e| e >= c.pos)
-            .ok_or(Error::Truncated { context: CONTEXT })?;
-        if bytes[end..] != PREVIEW_END {
-            return Err(Error::BadSentinel("preview end"));
-        }
         // The overall size counts the bytes between itself and the end
-        // sentinel.
-        if usize::try_from(overall).ok() != Some(end - c.pos) {
-            return Err(corrupt(&format!("overall size {overall}")));
+        // sentinel. AutoCAD can leave stale bytes after the sentinel (the
+        // section keeps the size of an older, larger preview), which are
+        // ignored.
+        let end = usize::try_from(overall)
+            .ok()
+            .and_then(|n| c.pos.checked_add(n))
+            .ok_or_else(|| corrupt(&format!("overall size {overall}")))?;
+        match bytes.get(end..).and_then(|b| b.get(..16)) {
+            None => return Err(Error::Truncated { context: CONTEXT }),
+            Some(s) if s != PREVIEW_END => {
+                return Err(if bytes.ends_with(&PREVIEW_END) {
+                    corrupt(&format!("overall size {overall}"))
+                } else {
+                    Error::BadSentinel("preview end")
+                });
+            }
+            Some(_) => {}
         }
         let n = usize::from(c.array::<1>()?[0]);
         let mut entries = Vec::with_capacity(n);
@@ -829,6 +835,27 @@ mod tests {
         let bytes = empty.encode(0x400).unwrap();
         assert_eq!(bytes.len(), 16 + 4 + 1 + 16);
         assert_eq!(Preview::decode(&bytes, None).unwrap(), empty);
+    }
+
+    /// AutoCAD leaves stale bytes after the end sentinel when a preview
+    /// shrinks (the section keeps the size of an older, larger one:
+    /// `asp-05`, `cps-01` and ACadSharp's `sample_base.dwg` of the extended
+    /// corpus). The overall size locates the end sentinel; what follows it
+    /// is ignored.
+    #[test]
+    fn stale_bytes_after_the_end_sentinel_are_ignored() {
+        let good = preview_bytes(0x1C0, 6, b"png");
+        let p = Preview::decode(&good, Some(0x1C0)).unwrap();
+        let mut stale = good.clone();
+        stale.extend_from_slice(b"IEND\xAE\x42\x60\x82");
+        stale.extend_from_slice(&PREVIEW_END);
+        assert_eq!(Preview::decode(&stale, Some(0x1C0)).unwrap(), p);
+        assert_eq!(Preview::decode(&stale, None).unwrap(), p);
+        // The sentinel must still be where the overall size puts it.
+        let mut moved = good[..good.len() - 16].to_vec();
+        moved.push(0);
+        moved.extend_from_slice(&PREVIEW_END);
+        assert!(Preview::decode(&moved, Some(0x1C0)).is_err());
     }
 
     /// Entries outside the section, of unknown codes, twice the same code,
