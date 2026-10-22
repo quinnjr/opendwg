@@ -39,8 +39,9 @@ objects re-encode byte for byte). Used in `src/object/tables.rs`:
 - LTYPE: the R2007+ text area is present when a dash has the text flag (0x02).
 - The lineweight index table (`CadUtils._indexedValue`) to read layer lineweights 9 (0.35 mm), 11
   (0.50 mm) and 31 (Default) in `tests/tables.rs`.
-ACadSharp's conditional R2004+ owned-object count for xref BLOCK_HEADERs was not followed (ODS
-has none and the corpus has no xref).
+- BLOCK_HEADER: from R2004 an xref or overlaid xref block stores no owned object count (and no
+  owned entities); ODS has the count always. Confirmed on Civil 3D's xref block in `camber-26` of
+  the extended corpus (`corpus/extended.toml`), which decodes to its last bit only so.
 
 ## ACadSharp (MIT) - basic, text and insert entities
 Consulted (not copied) `readInsertCommonData`, `readInsertCommonHandles`, `readCommonAttData`,
