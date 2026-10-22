@@ -113,8 +113,8 @@ pub enum XRecordValue {
     Binary(Vec<u8>),
     ObjectId(Handle),
     /// The rest of the data bytes from the start of an item whose group
-    /// code has no known type or whose value could not be read as its type,
-    /// its group code included (or a lone trailing byte, with no room for a
+    /// code has no known type or whose value could not be read as its type
+    /// (R2007+ text that is not UTF-16 included), its group code included (or a lone trailing byte, with no room for a
     /// code). The pair's code is the code read (0 for a lone byte) and is
     /// not written again: it must match the bytes' first two. It can only
     /// be the last item.
@@ -180,12 +180,18 @@ impl ItemReader<'_> {
         self.array().map(f64::from_le_bytes)
     }
 
-    /// A text value, and whether it decoded lossily.
+    /// A text value, and whether it decoded lossily; `None` for R2007+ text
+    /// that is not UTF-16 (a lone surrogate), which is kept as bytes (see
+    /// [`XRecordValue::Unknown`]): unlike older text, which converts to
+    /// R2018 anyway, it can be written back unchanged.
     fn text(&mut self) -> Option<(String, bool)> {
         let n = usize::from(u16::from_le_bytes(self.array()?));
         if self.version >= Version::R2007 {
             let bytes = self.take(n.checked_mul(2)?)?;
-            Some(strings::decode_utf16le_checked(bytes))
+            match strings::decode_utf16le_checked(bytes) {
+                (_, true) => None,
+                text => Some(text),
+            }
         } else {
             let codepage = self.array::<1>()?[0];
             let bytes = self.take(n)?;
@@ -556,7 +562,19 @@ pub(crate) mod tests {
         // Each case: the bytes and the items they parse to; written back,
         // the same bytes.
         type Items = Vec<(i16, XRecordValue)>;
-        let cases: [(&[u8], Items); 4] = [
+        let cases: [(&[u8], Items); 5] = [
+            // R2007+ text that is not UTF-16 (a lone surrogate), as Civil
+            // 3D's material records hold it (`camber-01` of the extended
+            // corpus): kept as bytes, with the items after it.
+            (
+                &[0x2C, 0x01, 2, 0, 0x41, 0, 0x00, 0xD8, 0x46, 0x00, 5, 0],
+                vec![(
+                    300,
+                    XRecordValue::Unknown(vec![
+                        0x2C, 0x01, 2, 0, 0x41, 0, 0x00, 0xD8, 0x46, 0x00, 5, 0,
+                    ]),
+                )],
+            ),
             // A Bool that is neither 0 nor 1.
             (
                 &[0x22, 0x01, 0x02, 0x46, 0x00, 0x05, 0x00],
