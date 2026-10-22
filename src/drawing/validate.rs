@@ -36,7 +36,9 @@
 //!   `*Model_Space` and `*Paper_Space`, the named object dictionary with
 //!   `ACAD_GROUP`, `ACAD_MLINESTYLE`, `ACAD_LAYOUT`, `ACAD_PLOTSETTINGS` and
 //!   `ACAD_PLOTSTYLENAME`, and layouts for model space and the header's paper
-//!   space in the layout dictionary;
+//!   space in the layout dictionary (but the dimension style `Standard` and
+//!   the `ACAD_GROUP` and `ACAD_PLOTSETTINGS` dictionaries, which the writer
+//!   adds when they are missing, a warning: see `drawing::repair`);
 //! - a header handle variable naming an object that does not exist or is
 //!   not of its kind, and a null $CLAYER, $TEXTSTYLE, $DIMSTYLE or $CELTYPE;
 //! - two records of one table with the same name, compared without case
@@ -252,6 +254,14 @@ impl Drawing {
     /// once. [`Drawing::to_bytes`] refuses a drawing with
     /// [`Severity::Error`] findings.
     pub fn validate(&self) -> Vec<Diagnostic> {
+        // Required objects the writer adds (see `drawing::repair`) are
+        // warnings; the drawing is checked with them.
+        if let Some((repaired, mut found)) = self.repaired() {
+            found.extend(repaired.validate());
+            found.sort_by(|a, b| (a.handle, &a.message).cmp(&(b.handle, &b.message)));
+            found.dedup();
+            return found;
+        }
         let changes = self.refreshed(&mut WriteWork::default());
         self.validate_written(&changes, &mut 0)
     }

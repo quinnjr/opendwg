@@ -5,7 +5,12 @@
 //!
 //! 1. Objects that cannot be written as R2018 fail the write with
 //!    [`Error::UnconvertibleObjects`] (see [`Drawing::unconvertible_objects`]).
-//! 2. The caches and derived values the drawing keeps as read are refreshed
+//! 2. Required objects the drawing lacks and the writer can make (the
+//!    dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
+//!    dictionaries) are added to a copy, which is written instead, with a
+//!    warning each (see `drawing::repair`).
+//!
+//!    The caches and derived values the drawing keeps as read are refreshed
 //!    on copies (the drawing itself is not changed), and objects R2018 does
 //!    not have are left out (both listed below).
 //! 3. [`Drawing::validate`] checks the drawing as it will be written: the
@@ -403,11 +408,16 @@ impl Drawing {
             .collect()
     }
 
-    /// Warnings about what writing the drawing as R2018 leaves out (layout
-    /// viewport entries naming no object, sections the writer cannot carry
-    /// over; see the module documentation of `drawing::write`). They do not
-    /// stop the write.
+    /// Warnings about what writing the drawing as R2018 adds (required
+    /// objects the drawing lacks, see `drawing::repair`) and leaves out
+    /// (layout viewport entries naming no object, sections the writer cannot
+    /// carry over; see the module documentation of `drawing::write`). They
+    /// do not stop the write.
     pub fn write_diagnostics(&self) -> Vec<Diagnostic> {
+        if let Some((repaired, mut diags)) = self.repaired() {
+            diags.extend(repaired.write_diagnostics());
+            return diags;
+        }
         let named_back: HashSet<Handle> = own_layout_viewports(&self.objects)
             .0
             .into_iter()
@@ -477,6 +487,9 @@ impl Drawing {
         let unconvertible = self.unconvertible_objects();
         if !unconvertible.is_empty() {
             return Err(Error::UnconvertibleObjects(unconvertible));
+        }
+        if let Some((repaired, _)) = self.repaired() {
+            return repaired.write(saved, work);
         }
         let changes = self.refreshed(work);
         let invalid: Vec<Diagnostic> = self

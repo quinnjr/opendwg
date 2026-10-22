@@ -62,7 +62,7 @@ fn invalid(handle: Option<Handle>, message: impl Into<String>) -> Error {
 }
 
 /// Symbol table names compare without case, as in AutoCAD.
-fn names_eq(a: &str, b: &str) -> bool {
+pub(super) fn names_eq(a: &str, b: &str) -> bool {
     a.chars()
         .flat_map(char::to_lowercase)
         .eq(b.chars().flat_map(char::to_lowercase))
@@ -305,7 +305,7 @@ impl Drawing {
     // ---- reading ----
 
     /// The control object of a table, from the header's control handle.
-    fn table_control(&self, kind: TableKind) -> Option<(Handle, &TableControl)> {
+    pub(super) fn table_control(&self, kind: TableKind) -> Option<(Handle, &TableControl)> {
         let h = &self.header;
         let control = match kind {
             TableKind::Block => h.block_control,
@@ -332,7 +332,7 @@ impl Drawing {
     /// control's extra entries first (`*Model_Space` and `*Paper_Space`;
     /// `ByBlock` and `ByLayer`), as AutoCAD lists them; then the counted
     /// entries in file order.
-    fn table_handles(&self, kind: TableKind) -> Vec<Handle> {
+    pub(super) fn table_handles(&self, kind: TableKind) -> Vec<Handle> {
         let Some((_, c)) = self.table_control(kind) else {
             return Vec::new();
         };
@@ -1373,7 +1373,7 @@ impl Drawing {
 
     /// The current text style: $TEXTSTYLE when it is a text style, else
     /// `Standard`.
-    fn current_text_style(&self) -> Option<Handle> {
+    pub(super) fn current_text_style(&self) -> Option<Handle> {
         let h = self.header.textstyle;
         if matches!(
             self.objects.get(&h),

@@ -442,7 +442,7 @@ fn linetype(name: &str, description: &str) -> NonGraphical {
 
 /// A dimension style with the header's dimension variables (the template's
 /// `Standard` style and the header agree), text style `text_style`.
-fn dim_style(name: &str, h: &HeaderVars, text_style: Handle) -> DimStyle {
+pub(super) fn dim_style(name: &str, h: &HeaderVars, text_style: Handle) -> DimStyle {
     DimStyle {
         entry: entry(name),
         dimpost: h.dimpost.clone(),

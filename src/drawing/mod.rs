@@ -32,6 +32,7 @@
 mod api;
 mod new;
 pub(crate) mod refs;
+mod repair;
 mod rewrite;
 mod validate;
 mod write;
