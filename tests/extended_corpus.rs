@@ -136,7 +136,13 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
             Ok(_) => Err("saved with unconvertible objects".into()),
         };
     }
-    let saved = d.to_bytes().map_err(|x| format!("save: {x}"))?;
+    let (saved, warnings) = d
+        .to_bytes_with_diagnostics()
+        .map_err(|x| format!("save: {x}"))?;
+    // The dry run lists what the write reported.
+    if warnings != d.write_diagnostics() {
+        return Err("write_diagnostics differs from the write's warnings".into());
+    }
     let back = Drawing::from_bytes(&saved).map_err(|x| format!("reopen: {x}"))?;
     let invalid = errors(&back.validate());
     if !invalid.is_empty() {

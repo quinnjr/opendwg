@@ -417,42 +417,12 @@ impl Drawing {
     /// carry over; see the module documentation of `drawing::write`). They
     /// do not stop the write.
     pub fn write_diagnostics(&self) -> Vec<Diagnostic> {
-        if let Some((repaired, mut diags)) = self.repaired() {
-            diags.extend(repaired.write_diagnostics());
-            return diags;
+        // A dry run of the write: the same steps, without the checks that
+        // refuse it and without encoding the objects.
+        match self.write(JulianDate::default(), &mut WriteWork::default(), true) {
+            Ok((_, diags)) => diags,
+            Err(e) => vec![warning(None, format!("the file cannot be laid out: {e}"))],
         }
-        let named_back: HashSet<Handle> = own_layout_viewports(&self.objects)
-            .0
-            .into_iter()
-            .map(|(h, _)| h)
-            .collect();
-        let dropped = self.drops().dropped;
-        let mut diags: Vec<Diagnostic> = self
-            .dangling_layout_viewports(&named_back, |v| {
-                dropped.contains(&v) || !self.objects.contains_key(&v)
-            })
-            .iter()
-            .map(|(h, missing)| dangling_viewports_warning(*h, missing))
-            .collect();
-        diags.extend(
-            self.plot_view_names()
-                .into_iter()
-                .filter_map(|(_, r)| r.err()),
-        );
-        diags.extend(self.null_owners().into_iter().map(|(_, _, w)| w));
-        let mut header = self.header.clone();
-        header.handseed = self.next_handseed();
-        let summary_len = self
-            .summary
-            .clone()
-            .unwrap_or_default()
-            .encode_r2018(&header)
-            .map_or(0, |s| s.len());
-        match r2018_preview_address(Some(summary_len)) {
-            Ok(at) => diags.extend(self.other_sections(&header, self.objects.len(), at).1),
-            Err(e) => diags.push(warning(None, format!("the file cannot be laid out: {e}"))),
-        }
-        diags
     }
 
     /// The drawing as an R2018 DWG file, saved now (see
@@ -467,8 +437,7 @@ impl Drawing {
     /// out ([`Drawing::write_diagnostics`]): an application can show them
     /// after saving. They never stop the write.
     pub fn to_bytes_with_diagnostics(&self) -> Result<(Vec<u8>, Vec<Diagnostic>)> {
-        let bytes = self.to_bytes()?;
-        Ok((bytes, self.write_diagnostics()))
+        self.write(julian_now(), &mut WriteWork::default(), false)
     }
 
     /// The drawing as an R2018 DWG file whose $TDUPDATE is `saved`. The same
@@ -482,20 +451,40 @@ impl Drawing {
     /// drawing is not changed. Sections left
     /// out (with a warning) are listed by [`Drawing::write_diagnostics`].
     pub fn to_bytes_at(&self, saved: JulianDate) -> Result<Vec<u8>> {
-        self.write(saved, &mut WriteWork::default())
+        self.write(saved, &mut WriteWork::default(), false)
+            .map(|(bytes, _)| bytes)
     }
 
     /// [`Drawing::to_bytes_at`], counting its work in `work`: steps 1 to 3
-    /// of the module documentation, then [`Drawing::encode_file`].
-    fn write(&self, saved: JulianDate, work: &mut WriteWork) -> Result<Vec<u8>> {
-        let unconvertible = self.unconvertible_objects();
-        if !unconvertible.is_empty() {
-            return Err(Error::UnconvertibleObjects(unconvertible));
+    /// of the module documentation, then [`Drawing::encode_file`]; with the
+    /// warnings about what the write adds and leaves out. A `dry_run` (for
+    /// [`Drawing::write_diagnostics`]) refuses nothing and returns no bytes,
+    /// only the warnings, which are thus those of a real write.
+    fn write(
+        &self,
+        saved: JulianDate,
+        work: &mut WriteWork,
+        dry_run: bool,
+    ) -> Result<(Vec<u8>, Vec<Diagnostic>)> {
+        if !dry_run {
+            let unconvertible = self.unconvertible_objects();
+            if !unconvertible.is_empty() {
+                return Err(Error::UnconvertibleObjects(unconvertible));
+            }
         }
-        if let Some((repaired, _)) = self.repaired() {
-            return repaired.write(saved, work);
+        if let Some((repaired, mut diags)) = self.repaired() {
+            let (bytes, more) = repaired.write(saved, work, dry_run)?;
+            diags.extend(more);
+            return Ok((bytes, diags));
         }
-        let changes = self.refreshed(work);
+        let mut changes = self.refreshed(work);
+        let mut diags = std::mem::take(&mut changes.warnings);
+        if dry_run {
+            let written = self.objects.len() - changes.dropped.len();
+            let (_, _, _, _, warnings) = self.sections(saved, written)?;
+            diags.extend(warnings);
+            return Ok((Vec::new(), diags));
+        }
         let invalid: Vec<Diagnostic> = self
             .validate_written(&changes, &mut 0)
             .into_iter()
@@ -504,17 +493,45 @@ impl Drawing {
         if !invalid.is_empty() {
             return Err(Error::Invalid(invalid));
         }
-        self.encode_file(saved, work, &changes)
+        let (bytes, warnings) = self.encode_file(saved, work, changes)?;
+        diags.extend(warnings);
+        Ok((bytes, diags))
+    }
+
+    /// The header as written, the summary information, the preview address
+    /// and the sections other than the objects, the object map, the header,
+    /// the classes and the data storage, with the warnings about sections
+    /// left out, for a file of `objects` objects.
+    #[allow(clippy::type_complexity)]
+    fn sections(
+        &self,
+        saved: JulianDate,
+        objects: usize,
+    ) -> Result<(
+        HeaderVars,
+        Vec<u8>,
+        u64,
+        BTreeMap<SectionName, Vec<u8>>,
+        Vec<Diagnostic>,
+    )> {
+        let mut header = self.header.clone();
+        header.handseed = self.next_handseed();
+        header.tdupdate = saved;
+        let summary = self.summary.clone().unwrap_or_default();
+        let summary = summary.encode_r2018(&header)?;
+        let preview_address = r2018_preview_address(Some(summary.len()))?;
+        let (sections, diags) = self.other_sections(&header, objects, preview_address);
+        Ok((header, summary, preview_address, sections, diags))
     }
 
     /// The file, with the objects as `changes` has them (steps 4 and 5 of the
-    /// module documentation).
+    /// module documentation), and the warnings about sections left out.
     fn encode_file(
         &self,
         saved: JulianDate,
         work: &mut WriteWork,
-        changes: &Changes,
-    ) -> Result<Vec<u8>> {
+        mut changes: Changes,
+    ) -> Result<(Vec<u8>, Vec<Diagnostic>)> {
         // Objects: "AcDb:AcDbObjects" starts with the RL 0x0DCA (ODS 20.1;
         // every R2004+ corpus file), locations count from the section start.
         let mut objects = 0x0DCAu32.to_le_bytes().to_vec();
@@ -538,9 +555,8 @@ impl Drawing {
         }
         work.class_probes += index.probes.get();
 
-        let mut header = self.header.clone();
-        header.handseed = self.next_handseed();
-        header.tdupdate = saved;
+        let (header, summary, preview_address, mut sections, diags) =
+            self.sections(saved, map.len())?;
         let mut classes = self.classes.clone();
         for c in &mut classes {
             let now = counts.get(&c.class_number).copied().unwrap_or(0);
@@ -557,11 +573,7 @@ impl Drawing {
             };
         }
 
-        let summary = self.summary.clone().unwrap_or_default();
-        let summary = summary.encode_r2018(&header)?;
-        let preview_address = r2018_preview_address(Some(summary.len()))?;
-        let (mut sections, _) = self.other_sections(&header, map.len(), preview_address);
-        if let Some(acds) = self.data_storage_section(changes)? {
+        if let Some(acds) = self.data_storage_section(&mut changes)? {
             sections.insert(SectionName::AcDsPrototype, acds);
         }
         sections.insert(SectionName::Header, header::encode_r2018(&header)?);
@@ -589,7 +601,7 @@ impl Drawing {
             file_header: if r2018 { self.read.file_header } else { None },
             warnings: Vec::new(),
         };
-        write_r2018(&raw)
+        Ok((write_r2018(&raw)?, diags))
     }
 
     /// Write the drawing as an R2018 DWG file at `path`, saved now (see
@@ -1051,7 +1063,7 @@ impl Drawing {
     /// without a record, fails the write with [`Error::Invalid`], a
     /// diagnostic per entity. A data storage section that could not be
     /// decoded is copied unchecked.
-    fn data_storage_section(&self, changes: &Changes) -> Result<Option<Vec<u8>>> {
+    fn data_storage_section(&self, changes: &mut Changes) -> Result<Option<Vec<u8>>> {
         let undecoded = self.storage_undecoded();
         let mut storage = match &self.data_storage {
             Some(s) => Some(s.clone()),
@@ -1066,9 +1078,7 @@ impl Drawing {
             None => Some(DataStorage::with_default_schemas()),
         };
         if let Some(storage) = &mut storage {
-            for (h, data) in &changes.acis_data {
-                storage.set_acis_data(*h, data.clone());
-            }
+            storage.set_acis_data_all(std::mem::take(&mut changes.acis_data));
             // Records of objects not written leave, and those of entities
             // emptied (converted from no data in this save).
             storage.retain_acis(|h| {
@@ -2194,7 +2204,7 @@ mod tests {
     fn write_unvalidated(d: &Drawing, work: &mut WriteWork) -> Vec<u8> {
         assert!(d.unconvertible_objects().is_empty());
         let changes = d.refreshed(work);
-        d.encode_file(SAVED, work, &changes).unwrap()
+        d.encode_file(SAVED, work, changes).unwrap().0
     }
 
     /// Review Focus 5's deterministic companion: the writer's work grows

@@ -868,7 +868,26 @@ impl DataStorage {
     /// replaced by one with `data`, placed in data index order (by schema,
     /// then handle). The schema is added (in ODS's form) when missing.
     /// Records not in that order (changed by hand) are sorted first, stably.
+    /// To set many, [`DataStorage::set_acis_data_all`] does it in one pass.
     pub fn set_acis_data(&mut self, h: Handle, data: Vec<u8>) {
+        self.set_acis_data_all([(h, data)]);
+    }
+
+    /// [`DataStorage::set_acis_data`] for each `(handle, data)` of `all` (a
+    /// handle given twice keeps its last data), in one pass over the
+    /// records: the replaced ones go, the new ones are added and the
+    /// records sorted once (stably).
+    pub fn set_acis_data_all(&mut self, all: impl IntoIterator<Item = (Handle, Vec<u8>)>) {
+        let mut new: HashMap<Handle, Vec<u8>> = HashMap::new();
+        let mut order = Vec::new();
+        for (h, data) in all {
+            if new.insert(h, data).is_none() {
+                order.push(h);
+            }
+        }
+        if order.is_empty() {
+            return;
+        }
         let schema = match self.schema_index(ACIS_SCHEMA) {
             Some(s) => s,
             None => {
@@ -878,21 +897,13 @@ impl DataStorage {
             }
         };
         self.records
-            .retain(|r| !(r.schema == schema && r.handle == h));
-        if !self.records.is_sorted_by_key(|r| (r.schema, r.handle)) {
-            self.records.sort_by_key(|r| (r.schema, r.handle));
-        }
-        let at = self
-            .records
-            .partition_point(|r| (r.schema, r.handle) < (schema, h));
-        self.records.insert(
-            at,
-            DataRecord {
-                handle: h,
-                schema,
-                data,
-            },
-        );
+            .retain(|r| !(r.schema == schema && new.contains_key(&r.handle)));
+        self.records.extend(order.into_iter().map(|h| DataRecord {
+            handle: h,
+            schema,
+            data: new.remove(&h).unwrap_or_default(),
+        }));
+        self.records.sort_by_key(|r| (r.schema, r.handle));
     }
 
     /// Keep only the ACIS records whose handle `keep` accepts (records of
@@ -1026,7 +1037,7 @@ impl DataStorage {
 
         // Schema data: the unknown properties, the schemas, then (aligned)
         // the property names.
-        let mut names: Vec<&str> = Vec::new();
+        let mut names = NameTable::default();
         let mut schdat = Vec::new();
         let mut prop_entries = Vec::new();
         for p in &self.unknown_properties {
@@ -1040,7 +1051,7 @@ impl DataStorage {
             write_schema(&mut schdat, s, &mut names)?;
         }
         let schdat_names = align_table(&mut schdat);
-        write_names(&mut schdat, names.iter().copied())?;
+        write_names(&mut schdat, names.names.iter().copied())?;
 
         let mut schidx = Vec::new();
         schidx.extend_from_slice(&len32(schema_entries.len())?.to_le_bytes());
@@ -1218,7 +1229,25 @@ fn write_names<'a>(out: &mut Vec<u8>, names: impl ExactSizeIterator<Item = &'a s
     Ok(())
 }
 
-fn write_schema<'a>(out: &mut Vec<u8>, s: &'a Schema, names: &mut Vec<&'a str>) -> Result<()> {
+/// The property names of the schema data segment, in first-use order, with
+/// each one's index.
+#[derive(Default)]
+struct NameTable<'a> {
+    names: Vec<&'a str>,
+    index: HashMap<&'a str, usize>,
+}
+
+impl<'a> NameTable<'a> {
+    /// The index of `name`, added at the end when new.
+    fn index_of(&mut self, name: &'a str) -> usize {
+        *self.index.entry(name).or_insert_with(|| {
+            self.names.push(name);
+            self.names.len() - 1
+        })
+    }
+}
+
+fn write_schema<'a>(out: &mut Vec<u8>, s: &'a Schema, names: &mut NameTable<'a>) -> Result<()> {
     let count = |n: usize| u16::try_from(n).map_err(|_| encode_err("schema too large"));
     out.extend_from_slice(&count(s.indexes.len())?.to_le_bytes());
     s.indexes
@@ -1226,13 +1255,7 @@ fn write_schema<'a>(out: &mut Vec<u8>, s: &'a Schema, names: &mut Vec<&'a str>) 
         .for_each(|i| out.extend_from_slice(&i.to_le_bytes()));
     out.extend_from_slice(&count(s.properties.len())?.to_le_bytes());
     for p in &s.properties {
-        let name = match names.iter().position(|n| *n == p.name) {
-            Some(i) => i,
-            None => {
-                names.push(&p.name);
-                names.len() - 1
-            }
-        };
+        let name = names.index_of(&p.name);
         out.extend_from_slice(&p.flags.to_le_bytes());
         out.extend_from_slice(&len32(name)?.to_le_bytes());
         if p.has_type() {
@@ -1396,6 +1419,41 @@ mod tests {
         s.retain_acis(|h| h != Handle(0x50));
         assert_eq!(s.records.len(), 1);
         assert_eq!(s.acis_data(Handle(0x60)), Some(&[2][..]));
+    }
+
+    /// Setting many records at once gives what setting them one by one
+    /// gives: a handle twice keeps its last data, records of other schemas
+    /// and handles stay, out-of-order records are sorted stably; nothing to
+    /// set adds no schema.
+    #[test]
+    fn acis_records_set_at_once() {
+        let mut base = DataStorage::with_default_schemas();
+        let other = base.schema_index("AcDbDs::LegacySchema").unwrap();
+        base.set_acis_data(Handle(0x30), vec![1]);
+        base.set_acis_data(Handle(0x50), vec![2]);
+        base.records.push(DataRecord {
+            handle: Handle(0x40),
+            schema: other,
+            data: vec![3],
+        });
+        base.records.reverse();
+        let batch = [
+            (Handle(0x50), vec![4]),
+            (Handle(0x20), vec![5]),
+            (Handle(0x45), vec![6]),
+            (Handle(0x20), vec![7]),
+        ];
+        let mut one_by_one = base.clone();
+        for (h, data) in batch.clone() {
+            one_by_one.set_acis_data(h, data);
+        }
+        let mut at_once = base.clone();
+        at_once.set_acis_data_all(batch);
+        assert_eq!(at_once, one_by_one);
+        assert_eq!(at_once.acis_data(Handle(0x20)), Some(&[7][..]));
+        let mut none = DataStorage::default();
+        none.set_acis_data_all([]);
+        assert_eq!(none, DataStorage::default());
     }
 
     /// Every prefix and many corruptions of a section fail cleanly; counts

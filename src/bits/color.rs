@@ -374,8 +374,10 @@ impl BitReader<'_> {
         if version >= Version::R2007 {
             self.read_tu()
         } else {
-            // Decoding to the drawing code page happens in the strings layer;
-            // names here are ASCII in practice.
+            // Not decoded with the drawing's code page: each byte is taken
+            // as its Latin-1 character, and the writer stores each character
+            // back as that byte (`write_color_text`), so any name round-trips.
+            // Names here are ASCII in practice.
             let raw = self.read_tv_raw()?;
             Ok(raw.iter().map(|&b| char::from(b)).collect())
         }

@@ -570,7 +570,10 @@ impl AppInfo {
             write_text(&mut out, &e.text, CONTEXT)?;
         }
         if let Some(v) = &self.version {
-            let bytes = crate::strings::encode(crate::strings::DEFAULT_CODEPAGE, v);
+            let bytes = crate::strings::encode_exact(crate::strings::DEFAULT_CODEPAGE, v)
+                .ok_or_else(|| {
+                    Error::Encode(format!("{CONTEXT}: version {v:?} is not Windows-1252"))
+                })?;
             let n = u16::try_from(bytes.len() + 1)
                 .map_err(|_| Error::Encode(format!("{CONTEXT}: version too long")))?;
             out.extend_from_slice(&n.to_le_bytes());
@@ -949,6 +952,17 @@ mod tests {
         let x = AppInfo::decode(&with_version, &mut diags).unwrap();
         assert_eq!(x.version.as_deref(), Some("2.7.2.0"));
         assert_eq!(x.encode_r2018().unwrap(), with_version);
+        // A version Windows-1252 cannot hold is refused, not written as a
+        // character reference.
+        let mut y = x.clone();
+        y.version = Some("2.7 \u{4E00}".into());
+        match y.encode_r2018() {
+            Err(Error::Encode(m)) => assert!(m.contains("Windows-1252"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        y.version = Some("2.7 \u{e9}\u{20AC}".into());
+        let bytes = y.encode_r2018().unwrap();
+        assert!(bytes.ends_with(&[b'7', b' ', 0xE9, 0x80, 0]));
         // A count beyond the bytes left.
         let mut bad = want.clone();
         let at = 4 + utf16("AppInfoDataList").len();

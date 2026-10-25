@@ -95,15 +95,28 @@ pub(crate) fn decode_utf16le_checked(bytes: &[u8]) -> (String, bool) {
 }
 
 /// Encode to code page bytes (unmappable characters become HTML numeric
-/// character references, as `encoding_rs` does). Used for test fixtures.
+/// character references, as `encoding_rs` does): lossy, so the library's
+/// writers use [`encode_exact`]. Used for test fixtures.
 #[doc(hidden)]
 pub fn encode(codepage: u16, s: &str) -> Vec<u8> {
+    encode_with_errors(codepage, s).0
+}
+
+/// Encode to code page bytes; `None` when the code page cannot hold every
+/// character of `s`.
+pub(crate) fn encode_exact(codepage: u16, s: &str) -> Option<Vec<u8>> {
+    let (bytes, had_errors) = encode_with_errors(codepage, s);
+    (!had_errors).then_some(bytes)
+}
+
+fn encode_with_errors(codepage: u16, s: &str) -> (Vec<u8>, bool) {
     let enc = encoding_for(codepage).unwrap_or(WINDOWS_1252);
     if enc == UTF_16LE {
         // encoding_rs encodes UTF-16 as UTF-8 (WHATWG), so do it here.
-        return s.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        return (s.encode_utf16().flat_map(u16::to_le_bytes).collect(), false);
     }
-    enc.encode(s).0.into_owned()
+    let (bytes, _, had_errors) = enc.encode(s);
+    (bytes.into_owned(), had_errors)
 }
 
 #[cfg(test)]
