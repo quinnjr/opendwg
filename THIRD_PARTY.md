@@ -268,17 +268,22 @@ licence; the sources:
 - Bricsys/rhino.inside-bricscad (MIT, Copyright (c) 2019 Bricsys NV): BricsCAD samples.
 - mozman/ezdxf (MIT, Copyright (c) 2020 Manfred Moitzi): documentation drawings.
 - OSGeo/gdal (MIT, "GDAL/OGR General" section of LICENSE.TXT): OGR CAD driver test data.
-- aspose-cad/Aspose.CAD-for-.NET and Aspose.CAD-for-Java (MIT, Copyright (c) Aspose Pty Ltd):
-  example drawings.
+- aspose-cad/Aspose.CAD-for-.NET (MIT, Copyright (c) Aspose Pty Ltd): Aspose's own test drawings
+  only (`asp-02`, `06`, `07`, `09`, `12`: test geometry saved by Aspose developers). Its example
+  drawings that carry another party's content (company names, domains or e-mail addresses,
+  real-world maps, plans or product drawings) are left out: Aspose cannot relicense them.
 - FsDiG/Fs.Fox.CAD (MIT, Copyright (c) 2021 InspireFunction), fyjgtddco/DSH-SW-and-CAD (MIT,
   Copyright (c) 2025), WuwuZhang0019/CADTools (Apache-2.0): GBK drawings.
 - ADN-DevTech/objectarx_sdks (MIT, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN): ObjectARX
-  SDK sample drawings.
+  SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the
+  MIT grant is their republication in Autodesk's own ADN DevTech organization.
 - Autodesk-Forge/design.automation-asp.net-cabinet-sample and design.automation-python-tutorial
   (MIT, Copyright (c) 2016/2017 Autodesk, Inc.), autodesk-platform-services/
   aps-design-automation-dotnet and autocad-da-acc-model-viewer (MIT, Copyright (c) 2018 Autodesk
   Platform Services / 2024 Madhukar Moogala): Autodesk sample drawings.
-- chuongmep/CadPythonShell and chuongmep/OpenMEP (MIT), KubaSzostak/Geo7 (MIT, Copyright (c) 2015
+- chuongmep/CadPythonShell and chuongmep/OpenMEP (MIT; their `sample_base.dwg` copies are
+  earlier versions of ACadSharp's `samples/sample_base.dwg`, re-saved, not byte-identical),
+  KubaSzostak/Geo7 (MIT, Copyright (c) 2015
   Kuba Szostak), qinchuan1122/cad-dwg-reader (MIT), backkem/codecad (MIT, Copyright (c) 2025
   CodeCAD contributors).
 - DomCR/ACadSharp at commit `29137f3adaf75ddebd532179eda1e811525ca574` (MIT, Copyright (c) 2021

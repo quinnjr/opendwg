@@ -23,9 +23,16 @@ use opendwg::{Drawing, Error, Handle, Severity};
 
 /// Research ids left out: third-party content under a repository licence
 /// (Mapwize, Autodesk samples redistributed by Aspose, a user's file, an
-/// architectural plan in a site template's repository).
-const EXCLUDED: [&str; 7] = [
-    "gdal-01", "asp-01", "asp-03", "asp-13", "asp-16", "ezdxf-05", "bur-01",
+/// architectural plan in a site template's repository), and Aspose example
+/// drawings whose own text names another party: `asp-04` (Downtown
+/// Minneapolis skyway map), `asp-05`/`asp-10` (product drawings, "1m83
+/// greyfence + BP"), `asp-08` (an AutoCAD support repro by another
+/// author), `asp-11` (dwgmodels.com icons), `asp-14` (eversendai.com),
+/// `asp-15` (Embassy Gardens masterplan), `aspj-01` (title block e-mail at
+/// offshorewindforce.com).
+const EXCLUDED: [&str; 15] = [
+    "gdal-01", "asp-01", "asp-03", "asp-13", "asp-16", "ezdxf-05", "bur-01", "asp-04", "asp-05",
+    "asp-08", "asp-10", "asp-11", "asp-14", "asp-15", "aspj-01",
 ];
 
 /// Object types the writer leaves out (see `drawing::write`): the R2000
@@ -414,4 +421,45 @@ fn r2000_multileader_with_no_background_color() {
             .iter()
             .all(|x| x.handle != Some(Handle(0x1C1E)))
     );
+}
+
+/// A raw Civil 3D entity of `camber-01` moved through `entity_mut` to
+/// another block's ownership, while model space still lists it, is
+/// repaired at save (its owner follows the list, with a warning) and reads
+/// back valid; listed by both blocks it is refused.
+#[test]
+fn raw_entity_owner_is_repaired_or_refused() {
+    let Some(mut d) = open("camber-01") else {
+        return;
+    };
+    let ms = d.model_space();
+    let raw = d
+        .entities_in(ms)
+        .find(|&e| d.get(e).is_some_and(|o| o.raw().is_some()))
+        .expect("a raw entity in model space");
+    let other = d.add_block("MOVED").unwrap();
+    {
+        let (common, _) = d.entity_mut(raw).unwrap();
+        common.entmode = 0;
+        common.obj.owner = other;
+    }
+    let errors = |d: &Drawing| {
+        d.validate()
+            .into_iter()
+            .filter(|x| x.severity == Severity::Error)
+            .count()
+    };
+    assert_eq!(errors(&d), 0);
+    let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+    assert!(warnings.iter().any(|x| x.handle == Some(raw)));
+    let back = Drawing::from_bytes(&bytes).unwrap();
+    assert_eq!(back.owner_of(raw), Some(ms));
+    assert_eq!(errors(&back), 0);
+    if let Some(opendwg::object::EntityList::Owned(list)) =
+        d.block_record_mut(other).map(|b| &mut b.entities)
+    {
+        list.push(raw);
+    }
+    assert!(errors(&d) > 0);
+    assert!(matches!(d.to_bytes(), Err(Error::Invalid(_))));
 }

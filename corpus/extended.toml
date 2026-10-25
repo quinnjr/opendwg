@@ -711,24 +711,6 @@ producer = "AutoCAD 2017 (registry 21.0)"
 license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
 
 [[file]]
-name = "asp-04"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/City%20skyway%20map.dwg"
-sha256 = "74ee543c4ef9edf3a906d2d308b792bb366a48ae53fffa042aceb72688a798d3"
-version = "AC1015"
-features = ["mtext"]
-producer = "unknown"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
-name = "asp-05"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/D%20ZD%20junior%20D10m%20H2m.dwg"
-sha256 = "640f13ef5f4deb688d0a431ce7cd2970e590dc16904890a243b9ea3adfa141a0"
-version = "AC1027"
-features = ["custom_objects","dimension","hatch","mtext"]
-producer = "AutoCAD 2019 (registry 23)"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
 name = "asp-06"
 url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/Drawing11.dwg"
 sha256 = "8a6e1bf534a3c689331607a88c0e6d46620c791a2b2b8b16b92ffed052b43599"
@@ -747,15 +729,6 @@ producer = "AutoCAD 2017 (registry 21.0)"
 license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
 
 [[file]]
-name = "asp-08"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/Multileaders.dwg"
-sha256 = "2cbafa182fb21da99107e97dbea69a1c35877a4280670253583a21782319e28f"
-version = "AC1027"
-features = ["custom_objects","mtext","proxy_graphics"]
-producer = "AutoCAD 2018 (registry 22.0)"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
 name = "asp-09"
 url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/SimpleEntites.dwg"
 sha256 = "bc58e0a5a3052cfdc06cb27636b0f7b1ffe98b32e8a27dab1743a5b9ac3cd259"
@@ -768,24 +741,6 @@ license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Asp
 unconvertible = true
 
 [[file]]
-name = "asp-10"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/ZD%20-%20Senior%20D6m%20H2m45.dwg"
-sha256 = "1c790ca92b72a08fc1c1593f74b36a33cbda378fb6be314ef9a97e73f7ea76cc"
-version = "AC1027"
-features = ["custom_objects","dimension","hatch","mtext","non_ascii"]
-producer = "AutoCAD 2019 (registry 23)"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
-name = "asp-11"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/ar_icons.dwg"
-sha256 = "ca8ecd11518f34f6b60af38f474113c7290551191b9c7d33515df7950a4a0743"
-version = "AC1021"
-features = ["custom_objects","hatch"]
-producer = "AutoCAD 2016 (registry 20.1)"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
 name = "asp-12"
 url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/meshes.dwg"
 sha256 = "bdef73872233a7d076b1694c45bac00d4f28c97d9e8036ec512b97b1125e2a5e"
@@ -793,36 +748,6 @@ version = "AC1027"
 features = ["custom_objects","proxy_graphics"]
 producer = "AutoCAD 2016 (registry 20.1)"
 license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
-name = "asp-14"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/search.dwg"
-sha256 = "c8c58a4f3539c7c88c326bf1ec9efef9c23ca119be523ea45a91b77fa85a2482"
-version = "AC1027"
-features = ["non_ascii"]
-producer = "AutoCAD 2014 (registry 19.1)"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
-name = "asp-15"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/test1.dwg"
-sha256 = "d1c53e590fb65eb6021c6c2891a9e28ce712132db519d415445e3a515ff7c6c2"
-version = "AC1024"
-features = ["custom_objects","hatch","image","mtext","proxy_graphics"]
-producer = "Teigha (registry 3.8)"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
-
-[[file]]
-name = "aspj-01"
-url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-Java/d778c5e0debd5ebf2bee01366110e97b93efe7ac/Examples/src/main/resources/DWGDrawings/sample_file.dwg"
-sha256 = "97aa3e443f37626e65e6a8acd22a383f5a7cae7ae33c1d51fcd4b65ce2d024da"
-version = "AC1015"
-features = ["attributes","custom_objects","dimension","hatch","mtext","proxy_graphics"]
-producer = "AutoCAD (saved down to R2000)"
-license_note = "MIT (aspose-cad/Aspose.CAD-for-Java, Copyright (c) 2001-2016 Aspose Pty Ltd); the LICENSE at the repository root, commit d778c5e0debd"
-
-[file.expect]
-unconvertible = true
 
 [[file]]
 name = "fox-01"
@@ -897,7 +822,7 @@ sha256 = "67b2f70fa0c883bd77fb88c02ace22057249ce49a9c0dfc4ce982c0628eb6464"
 version = "AC1014"
 features = []
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [file.expect]
 open = "unsupported"
@@ -909,7 +834,7 @@ sha256 = "3c1e59b472adb072e1f91a2e718d111240c41e354ae0a649009a5364d5b80e96"
 version = "AC1015"
 features = ["attributes","hatch","mtext","non_ascii"]
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-03"
@@ -918,7 +843,7 @@ sha256 = "6c72dc5fd6452490b6c3949a36d129c55e3f005149e883b269103fd68cbed7f1"
 version = "AC1018"
 features = ["attributes","hatch","mtext"]
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-04"
@@ -927,7 +852,7 @@ sha256 = "623e79d3a5422dee1ea9206e698466ec96c994cc0fa925f7f9a348deb8e09d1d"
 version = "AC402b"
 features = []
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [file.expect]
 open = "unsupported"
@@ -939,7 +864,7 @@ sha256 = "2b1a606e79e5000e65f0e1f7bb6c24dbf8e72237fdf8488ae238ce3862155390"
 version = "AC1018"
 features = ["hatch"]
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-06"
@@ -948,7 +873,7 @@ sha256 = "7f2c0a990192f63563fc0feec787445972110d423868816f0d1c3ae171164c79"
 version = "AC1018"
 features = []
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-07"
@@ -957,7 +882,7 @@ sha256 = "6a1aa7096507181475d2f775ab9815022badc545b330bcefce34d3ea3f55c74e"
 version = "AC1018"
 features = ["hatch"]
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-08"
@@ -966,7 +891,7 @@ sha256 = "54cc4917caf38268c56bc1280dc468bfb2be12c81b3bde35d0ef838b576ab3a1"
 version = "AC1018"
 features = []
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-09"
@@ -975,7 +900,7 @@ sha256 = "761559b462ce9e4f5d28ddc7742403fbdd3d54123f9ce8b21c3be4b4a997090f"
 version = "AC1018"
 features = []
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-10"
@@ -984,7 +909,7 @@ sha256 = "e7b8ae51de690a31dbde3aa52afa3aa3eb173c458ab017e826df4b998d424794"
 version = "AC1018"
 features = []
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-11"
@@ -993,7 +918,7 @@ sha256 = "c1a9d94abcdfd708ae46d8817f3008f66d08eae05cf77153f54945fd1eac5859"
 version = "AC1012"
 features = []
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [file.expect]
 open = "unsupported"
@@ -1005,7 +930,7 @@ sha256 = "b4a1437b151491faddaeff8e2786f64b1acdeded8d668384aefbb5eaf490bb96"
 version = "AC1021"
 features = ["custom_objects","mtext"]
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-13"
@@ -1014,7 +939,7 @@ sha256 = "7d586d7c868a41f3e726262da83c2b24c615d85216232d327f2338924521cc48"
 version = "AC1021"
 features = ["attributes","custom_objects","image","proxy_graphics"]
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "arx-15"
@@ -1023,7 +948,7 @@ sha256 = "5537821e56871699e3efcf2b18bdf28246f9e27449ac1b3f90da833f767c6f23"
 version = "AC1024"
 features = ["custom_objects","mtext"]
 producer = "AutoCAD (ObjectARX SDK sample)"
-license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings republished by Autodesk's ADN"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
 [[file]]
 name = "adsk-cab-01"
@@ -1095,7 +1020,7 @@ sha256 = "1082e08370f5c33b41d98e45d781b0c2719abb69097e9d28d35a7731c0c15341"
 version = "AC1032"
 features = ["attributes","custom_objects","dimension","hatch","mtext","non_ascii","proxy_graphics"]
 producer = "AutoCAD 2021 (registry 24.0)"
-license_note = "MIT (chuongmep/CadPythonShell); License.md at the repository root, commit 95153b9d8934"
+license_note = "MIT (chuongmep/CadPythonShell); License.md at the repository root, commit 95153b9d8934. The drawing is an earlier copy of ACadSharp's samples/sample_base.dwg (MIT, Albert Domenech), re-saved by AutoCAD 2021: not byte-identical (its content is a subset of the current sample)"
 
 [[file]]
 name = "omep-01"
@@ -1104,7 +1029,7 @@ sha256 = "56752d996a29d7d8cd88879c95da132902618c73d701bf93cd18833952eabed8"
 version = "AC1032"
 features = ["attributes","custom_objects","dimension","hatch","mtext","non_ascii","proxy_graphics"]
 producer = "AutoCAD 2022 (registry 24.1)"
-license_note = "MIT (chuongmep/OpenMEP); LICENSE.md at the repository root, commit b172d526b91b"
+license_note = "MIT (chuongmep/OpenMEP); LICENSE.md at the repository root, commit b172d526b91b. The drawing is an earlier copy of ACadSharp's samples/sample_base.dwg (MIT, Albert Domenech), re-saved by AutoCAD 2022: not byte-identical (its content is a subset of the current sample)"
 
 [[file]]
 name = "geo7-01"
