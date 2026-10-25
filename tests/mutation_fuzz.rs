@@ -114,16 +114,26 @@ fn mutate(rng: &mut Rng, b: &mut Vec<u8>) -> String {
 struct Outcome {
     read: bool,
     written: bool,
+    /// Why a written file did not read back (a failure).
+    unreadable: Option<String>,
 }
 
-/// Read `bytes`, and write the drawing when it reads.
+/// Read `bytes`, write the drawing when it reads, and read the written file
+/// back.
 fn read_and_write(bytes: &[u8]) -> Outcome {
     let Ok(d) = Drawing::from_bytes(bytes) else {
         return Outcome::default();
     };
+    let Ok(written) = d.to_bytes() else {
+        return Outcome {
+            read: true,
+            ..Outcome::default()
+        };
+    };
     Outcome {
         read: true,
-        written: d.to_bytes().is_ok(),
+        written: true,
+        unreadable: Drawing::from_bytes(&written).err().map(|e| e.to_string()),
     }
 }
 
@@ -185,20 +195,32 @@ fn mutated_files_never_panic_or_hang() {
                 Ok((o, _)) => {
                     read += usize::from(o.read);
                     written += usize::from(o.written);
+                    if let Some(e) = o.unreadable {
+                        failures.push(format!(
+                            "{name} case {case} ({}): the written file does not read back: {e}",
+                            steps.join("; ")
+                        ));
+                    }
                 }
                 Err(e) => failures.push(format!("{name} case {case} ({}): {e}", steps.join("; "))),
             }
         }
     }
-    eprintln!(
-        "{} mutated files: {read} read, {written} also written",
-        inputs.len() as u64 * cases
-    );
+    let total = inputs.len() as u64 * cases;
+    eprintln!("{total} mutated files: {read} read, {written} also written and read back");
     assert!(
         failures.is_empty(),
         "seed {seed:#x}, {cases} cases per input:\n{}",
         failures.join("\n")
     );
+    // The check is hollow if no mutated file gets as far as the writer
+    // (27 read and 16 written of the 72 default cases on the main corpus).
+    if total >= 20 {
+        assert!(
+            read > 0 && written > 0,
+            "{total} mutated files: {read} read, {written} written"
+        );
+    }
 }
 
 #[test]

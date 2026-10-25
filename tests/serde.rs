@@ -254,6 +254,13 @@ fn hostile_json_never_panics_or_writes_unreadable_files() {
     }
     eprintln!("{cases} cases: {deserialized} deserialized, {saved} saved and read back");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // The check is hollow if the edits leave nothing to save: a quarter of
+    // the cases deserialize and a quarter of those save (about half and 90%
+    // at the default 150 cases).
+    assert!(
+        deserialized * 4 >= cases && saved * 4 >= deserialized,
+        "{deserialized} deserialized, {saved} saved of {cases} cases"
+    );
 }
 
 /// An error serializes as `{ kind, message, handles? }`, so a Tauri command

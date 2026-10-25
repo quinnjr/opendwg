@@ -1,9 +1,9 @@
-//! Dump information about a DWG file. Grows with each task: prints the version, code page and
-//! the raw section names and sizes; `--header` also prints the header variables, and
+//! Dump information about a DWG file: prints the version, code page and the raw section
+//! names and sizes; `--header` also prints the header variables, and
 //! `--objects` the classes, the summary, preview and app info sections, every object as
 //! `handle type_name` (with the main fields of typed objects), and the diagnostics.
 //! `--proxy <handle>` prints the proxy graphics primitives of the entity with that
-//! (hexadecimal) handle.
+//! (hexadecimal) handle, after the objects when both are asked for.
 
 use std::process::ExitCode;
 
@@ -501,9 +501,6 @@ fn main() -> ExitCode {
             }
         }
     }
-    if let Some(handle) = proxy {
-        return dump_proxy(&bytes, path, &raw, handle);
-    }
     if show_objects {
         let d = match Drawing::from_bytes(&bytes) {
             Ok(d) => d,
@@ -556,6 +553,10 @@ fn main() -> ExitCode {
             let at = diag.handle.map(|h| format!(" {h}")).unwrap_or_default();
             println!("{:?}{at}: {}", diag.severity, diag.message);
         }
+    }
+    // Last, as the usage lists it: with `--objects`, both are printed.
+    if let Some(handle) = proxy {
+        return dump_proxy(&bytes, path, &raw, handle);
     }
     ExitCode::SUCCESS
 }
