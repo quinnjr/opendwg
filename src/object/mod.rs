@@ -524,8 +524,8 @@ impl NonGraphical {
     /// could not be read ([`NonGraphical::Unreadable`]), an R2000 block
     /// record whose entity list has not been built (see [`EntityList`]), a
     /// table entry whose xref index R2018 cannot store (see [`TableEntry`]),
-    /// a pre-R2010 table style unless its title and header rows are both
-    /// suppressed (see `TableStyle::is_convertible`), a multiline style with
+    /// a pre-R2010 table style with a suppressed title or header row (see
+    /// [`TableStyle::is_convertible`]), a multiline style with
     /// a linetype index, spatial index bits read before R2007, or an XRECORD
     /// read before R2007 that keeps the bytes of an unknown item (see
     /// [`XRecord::is_convertible`]).

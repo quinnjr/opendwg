@@ -270,7 +270,10 @@ fn read_system_page(
     let src = span(bytes, address, encoded).ok_or(Error::Truncated { context: what })?;
     // `blocks` is at most the file size / 255 here.
     let blocks = blocks as usize;
-    let decoded = rs2007::decode(src, blocks, SYSTEM_K, blocks)?;
+    // The repeat copies are not used: correct only the codewords of the
+    // first.
+    let first = (c as usize).div_ceil(SYSTEM_K);
+    let decoded = rs2007::decode_first(src, blocks, SYSTEM_K, blocks, first)?;
     let payload = &decoded[..c as usize];
     if crc64_mirrored(crc64_seed1(crc_seed, payload.len()), payload) != sp.crc_compressed {
         return Err(Error::BadCrc { context: what });

@@ -631,16 +631,15 @@ fn is_sab(data: &[u8]) -> bool {
     data.starts_with(b"ACIS BinaryFile") || data.starts_with(b"ASM BinaryFile")
 }
 
-/// The end of the first end-of-data marker in `data`.
+/// The end of the first end-of-data marker in `data` (the earliest end of
+/// any marker), in one pass: at each end position, whether a marker ends
+/// there.
 fn acis_end(data: &[u8]) -> Option<usize> {
-    ACIS_END_MARKERS
-        .iter()
-        .filter_map(|m| {
-            data.windows(m.len())
-                .position(|w| w == *m)
-                .map(|at| at + m.len())
-        })
-        .min()
+    (1..=data.len()).find(|&end| {
+        ACIS_END_MARKERS
+            .iter()
+            .any(|m| end >= m.len() && data[end - m.len()..end] == **m)
+    })
 }
 
 fn skip_3bd(d: &mut BitReader, n: usize) -> Result<()> {
@@ -745,13 +744,11 @@ impl AcisEntity {
                 // No length is stored: the data runs to its end marker.
                 let start = d.bit_pos();
                 let mut rest = d.clone();
-                let all = rest.read_bytes((rest.remaining_bits() / 8) as usize)?;
-                let end = acis_end(&all).ok_or_else(|| corrupt("no end of ACIS data"))?;
+                let mut data = rest.read_bytes((rest.remaining_bits() / 8) as usize)?;
+                let end = acis_end(&data).ok_or_else(|| corrupt("no end of ACIS data"))?;
                 d.seek_bit(start + 8 * end as u64)?;
-                AcisPayload::Inline {
-                    unknown,
-                    data: all[..end].to_vec(),
-                }
+                data.truncate(end);
+                AcisPayload::Inline { unknown, data }
             }
             v => return Err(corrupt(format!("unknown ACIS data version {v}"))),
         })
@@ -1025,6 +1022,37 @@ pub(crate) mod tests {
     use crate::bits::BitWriter;
     use crate::error::Error;
     use crate::object::stream::tests::assemble;
+
+    /// The one-pass marker search finds the earliest end, as searching for
+    /// each marker and taking the first end does.
+    #[test]
+    fn acis_end_is_the_earliest_marker_end() {
+        let each = |data: &[u8]| {
+            ACIS_END_MARKERS
+                .iter()
+                .filter_map(|m| {
+                    data.windows(m.len())
+                        .position(|w| w == *m)
+                        .map(|at| at + m.len())
+                })
+                .min()
+        };
+        let sab_acis = ACIS_END_MARKERS[2];
+        let sab_asm = ACIS_END_MARKERS[3];
+        let cases: Vec<Vec<u8>> = vec![
+            b"".to_vec(),
+            b"no marker".to_vec(),
+            b"x End-of-ACIS-data y".to_vec(),
+            b"End-of-ASM-dataEnd-of-ACIS-data".to_vec(),
+            b"End-of-ACIS-dataEnd-of-ASM-data".to_vec(),
+            [b"head".as_slice(), sab_asm, sab_acis].concat(),
+            [b"head".as_slice(), sab_acis, b"tail"].concat(),
+            b"End-of-ACIS-dat".to_vec(),
+        ];
+        for c in cases {
+            assert_eq!(acis_end(&c), each(&c), "{c:?}");
+        }
+    }
 
     pub(crate) fn viewport() -> Viewport {
         Viewport {

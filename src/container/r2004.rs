@@ -345,7 +345,8 @@ fn read_section(st: &mut SectionReader<'_>, desc: &SectionDesc) -> Result<Vec<u8
     }
     st.budget -= desc.size;
 
-    let mut out = Vec::new();
+    // Within the budget and the pages the file holds (checked above).
+    let mut out = Vec::with_capacity(size);
     for r in &desc.pages {
         // Omitted zero pages precede a page whose start is past the data so far.
         let start = usize::try_from(r.start)
@@ -438,8 +439,8 @@ fn read_section(st: &mut SectionReader<'_>, desc: &SectionDesc) -> Result<Vec<u8
         }
 
         if desc.compressed == 2 {
-            let page_data = lz77_2004::decompress(data, page_size)?;
-            out.extend_from_slice(&page_data[..logical]);
+            lz77_2004::decompress_into(data, page_size, &mut out)?;
+            out.truncate(start + logical);
         } else {
             // ODS 4.5: a stored page holds the whole page image, padding included. One cut
             // short after the bytes the section uses loses only padding: read, with a warning.

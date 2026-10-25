@@ -20,7 +20,7 @@
 //! Locations are file offsets in R2000 and offsets into `AcDb:AcDbObjects`
 //! from R2004; the map itself does not say which.
 
-use crate::bits::{BitReader, BitWriter};
+use crate::bits::BitReader;
 use crate::codec::crc16;
 use crate::diag::{Diagnostic, Severity};
 use crate::error::{Error, Result};
@@ -139,18 +139,20 @@ pub fn encode(map: &[(Handle, u64)]) -> Result<Vec<u8>> {
     sorted.sort_by_key(|&(h, _)| h);
     let mut out = Vec::new();
     let mut page = Vec::new();
+    let mut pair = Vec::with_capacity(20);
     let (mut last_h, mut last_l) = (0u64, 0i64);
     for &(h, loc) in &sorted {
         let loc = i64::try_from(loc).map_err(|_| encode_err("location too large"))?;
-        let pair = encode_pair(h.0 - last_h, loc - last_l)?;
+        pair.clear();
+        encode_pair(&mut pair, h.0 - last_h, loc - last_l)?;
         if 2 + page.len() + pair.len() > MAX_PAGE {
             flush(&mut out, &page);
             page.clear();
             // The running handle and location restart at 0 on a new page.
-            page.extend(encode_pair(h.0, loc)?);
-        } else {
-            page.extend(pair);
+            pair.clear();
+            encode_pair(&mut pair, h.0, loc)?;
         }
+        page.extend_from_slice(&pair);
         (last_h, last_l) = (h.0, loc);
     }
     if !page.is_empty() {
@@ -160,11 +162,25 @@ pub fn encode(map: &[(Handle, u64)]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn encode_pair(dh: u64, dl: i64) -> Result<Vec<u8>> {
-    let mut w = BitWriter::new();
-    w.write_umc(dh);
-    w.write_mc(dl)?;
-    Ok(w.into_bytes())
+/// Append a pair: the handle offset as an unsigned modular char, the
+/// location offset as a modular char (as `BitWriter::write_umc` and
+/// `write_mc` write them, byte-aligned here).
+fn encode_pair(out: &mut Vec<u8>, mut dh: u64, dl: i64) -> Result<()> {
+    while dh >= 0x80 {
+        out.push((dh & 0x7F) as u8 | 0x80);
+        dh >>= 7;
+    }
+    out.push(dh as u8);
+    let mut m = dl.unsigned_abs();
+    if m >= 1 << 62 {
+        return Err(encode_err("modular char magnitude must be below 2^62"));
+    }
+    while m >= 0x40 {
+        out.push((m & 0x7F) as u8 | 0x80);
+        m >>= 7;
+    }
+    out.push(m as u8 | if dl < 0 { 0x40 } else { 0 });
+    Ok(())
 }
 
 /// Append one page: size, `pairs`, CRC.
@@ -184,7 +200,7 @@ mod tests {
     fn page(pairs: &[(u64, i64)]) -> Vec<u8> {
         let mut body = Vec::new();
         for &(h, l) in pairs {
-            body.extend(encode_pair(h, l).unwrap());
+            encode_pair(&mut body, h, l).unwrap();
         }
         let mut out = Vec::new();
         flush(&mut out, &body);
@@ -216,6 +232,28 @@ mod tests {
         assert_eq!(pos, bytes.len());
         assert!(pages > 3, "{pages} pages");
         assert_eq!(decode(&bytes).unwrap(), map);
+    }
+
+    /// The byte encoder writes what the bit writer's UMC and MC write.
+    #[test]
+    fn pairs_match_the_bit_writer() {
+        for (h, l) in [
+            (0u64, 0i64),
+            (1, -1),
+            (0x7F, 0x3F),
+            (0x80, 0x40),
+            (0x3FFF, -0x40),
+            (u64::MAX, (1 << 62) - 1),
+            (12345, -(1 << 40)),
+        ] {
+            let mut w = crate::bits::BitWriter::new();
+            w.write_umc(h);
+            w.write_mc(l).unwrap();
+            let mut got = Vec::new();
+            encode_pair(&mut got, h, l).unwrap();
+            assert_eq!(got, w.into_bytes(), "{h:#x} {l:#x}");
+        }
+        assert!(encode_pair(&mut Vec::new(), 0, 1 << 62).is_err());
     }
 
     #[test]
@@ -309,7 +347,8 @@ mod tests {
         bytes.extend(end_page());
         assert!(matches!(decode(&bytes), Err(Error::Corrupt(_))));
         // A page ending inside a modular char.
-        let mut body = encode_pair(5, 100).unwrap();
+        let mut body = Vec::new();
+        encode_pair(&mut body, 5, 100).unwrap();
         body.push(0x85); // continuation with no next byte
         let mut bytes = Vec::new();
         flush(&mut bytes, &body);
