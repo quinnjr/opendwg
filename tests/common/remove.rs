@@ -1,6 +1,6 @@
 //! Removing a drawing's objects through the API: the unconvertible objects
-//! of an R2000/R2004 corpus file, so that the rest saves (Task 22's
-//! round-trip tests, shared with the Task 26 sign-off pack and oracle tests).
+//! of an R2000/R2004 corpus file, so that the rest saves (the round-trip
+//! tests, shared with the sign-off pack and the ODA converter tests).
 
 use std::collections::HashSet;
 

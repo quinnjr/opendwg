@@ -114,7 +114,7 @@ impl DxfClass {
 /// version R18, maintenance 0; R18 is written as 25, the DWG version of
 /// the corpus's R18 classes TABLESTYLE and ACAD_TABLE); PLOTSETTINGS,
 /// which neither has, takes those of LAYOUT, whose C++ class derives from
-/// it. These three are for Task 26's oracle to confirm.
+/// it. These three are unconfirmed against AutoCAD.
 #[rustfmt::skip]
 const KNOWN_CLASSES: [(&str, &str, &str, u16, u16, u32, u32); 29] = [
     ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault", "ObjectDBX Classes", 0x0, ITEM_CLASS_OBJECT, 22, 42),

@@ -1,5 +1,5 @@
 //! Corpus checks of the hatches, viewports, images, wipeouts, ACIS
-//! (modeler) entities, OLE frames and proxy entities (Task 17): every entity
+//! (modeler) entities, OLE frames and proxy entities: every entity
 //! of these types decodes typed, the counts match the manifest, R2018
 //! entities re-encode bit for bit, older versions convert (or are refused
 //! when R2018 cannot hold them), and values that pin ODS deviations are
@@ -23,7 +23,8 @@ use opendwg::section::JulianDate;
 use opendwg::section::acds::ACIS_SCHEMA;
 use opendwg::{Drawing, Error, Handle, Version};
 
-/// The Task 17 entity types, by type name, with their manifest count keys.
+/// The entity types checked here, by type name, with their manifest count
+/// keys.
 const TYPES: [(&str, &str); 9] = [
     ("HATCH", "hatch_count"),
     ("VIEWPORT", "viewport_count"),

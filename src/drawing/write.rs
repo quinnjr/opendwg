@@ -100,12 +100,13 @@
 //!
 //! What each section is written as, by source version ("2010+" means read
 //! from R2010, R2013 or R2018); AutoCAD 2018's files in the corpus are the
-//! guide, and Task 26's oracle checks the decisions.
+//! guide; the decisions are unconfirmed against AutoCAD until the sign-off
+//! pack (`tests/common/pack.rs`) is checked in it.
 //!
 //! | Section | Written as |
 //! |---|---|
 //! | AuxHeader | Always written (AutoCAD always writes it): the source's, converted to the R2018 layout (the three maintenance version fields AutoCAD widens from `RS` to `RL` in R2018; ODS puts the extra bytes at the end, the corpus shows them there), with version 33 (AC1032), $TDCREATE, $TDUPDATE and $HANDSEED updated. Without one, or with an unknown layout (a warning), the ODS 27 fields with one save (see `aux_default`). |
-//! | ObjFreeSpace | Always written. 2010+: copied (the 89-byte form), with $TDUPDATE updated and the object count raised to the objects written when that is larger. Before: regenerated in that form (ODS 21 with 64-bit values, as the corpus has them). The count is "approximate" (ODS) and AutoCAD's exceeds the objects stored (949 for 842 in the R2018 sample); a copied count left above the objects after removals is not lowered. Task 26's oracle is to confirm AutoCAD accepts both. |
+//! | ObjFreeSpace | Always written. 2010+: copied (the 89-byte form), with $TDUPDATE updated and the object count raised to the objects written when that is larger. Before: regenerated in that form (ODS 21 with 64-bit values, as the corpus has them). The count is "approximate" (ODS) and AutoCAD's exceeds the objects stored (949 for 842 in the R2018 sample); a copied count left above the objects after removals is not lowered. Unconfirmed against AutoCAD: whether it accepts both. |
 //! | Template | Always written (ODS: mandatory from R2004). R2007+: copied (UTF-16 description). Before: converted (description re-encoded). Without one: an empty description. $MEASUREMENT is the header's when set, else the source's, else 0. A description too long for its 16-bit length is left empty, with a warning. |
 //! | RevHistory | Always written: copied (the same 16 bytes in every R2004+ corpus file), else ODS's R21 form (0, 0, 1, 0). |
 //! | AppInfoHistory | Copied (the same form from R2004 to R2018 in the corpus); its content is unknown, so without one none is written. |
@@ -2207,7 +2208,8 @@ mod tests {
         d.encode_file(SAVED, work, changes).unwrap().0
     }
 
-    /// Review Focus 5's deterministic companion: the writer's work grows
+    /// The deterministic companion of `large_drawing_roundtrip_is_linear`
+    /// (tests/roundtrip.rs): the writer's work grows
     /// linearly with the objects.
     #[test]
     fn write_work_is_linear() {
@@ -2491,9 +2493,9 @@ mod tests {
     /// A proxy entity read from R2000 or R2004 is convertible (its data is
     /// in the object format its own version fields name): added to a new
     /// R2018 drawing, it saves and reads back with its payload and object
-    /// ids unchanged (Task 25; no corpus file has proxy entities). This shows
-    /// the library's own consistency only: whether AutoCAD accepts such a
-    /// proxy is an oracle item (Task 26).
+    /// ids unchanged (no corpus file has proxy entities). This shows the
+    /// library's own consistency only: whether AutoCAD accepts such a proxy
+    /// is unconfirmed against AutoCAD.
     #[test]
     fn proxy_entity_from_old_file_roundtrips() {
         use crate::bits::BitWriter;

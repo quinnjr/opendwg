@@ -319,8 +319,7 @@ SOFTWARE.
 ## Tooling (not distributed)
 
 ### ODA File Converter (Open Design Alliance)
-Not bundled or redistributed. Considered for Task 26 (round-trip verification by an independent
-reader). Checked 2026-10-18.
+Not bundled or redistributed. Considered for round-trip verification by an independent reader. Checked 2026-10-18.
 - The download page (https://www.opendesign.com/guestfiles/oda_file_converter) names no licence.
   The only ODA agreement for free downloads is the *Community User Agreement* (5 Sep 2025,
   https://www.opendesign.com/agreements/2025/en/ODA%20Community%20User%20Agreement%2009-2025.pdf),
@@ -341,7 +340,7 @@ reader). Checked 2026-10-18.
   not clearly covered; Documentation may only be used "for evaluation and reference".
 - Outcome: running it manually or from an opt-in local test (developer has accepted the agreement
   and installed it; test skipped when absent) is permitted. Running it in hosted/shared CI is not
-  clearly permitted, so CI must not download or run it. Task 26 uses the fallback described in the
-  spec for CI. Ask ODA (support@opendesign.com) for written confirmation if CI use is wanted.
+  clearly permitted, so CI must not download or run it; CI relies on the library's own tests
+  instead. Ask ODA (support@opendesign.com) for written confirmation if CI use is wanted.
 - Use: `tests/oda.rs` runs a converter the developer installed (`ODA_FILE_CONVERTER` or `PATH`),
   skips with a printed message when it is absent, and never runs it when `CI` is set.

@@ -1,5 +1,5 @@
 //! Corpus checks of the summary information, preview and application
-//! information sections (Task 18): every corpus file's sections decode, the
+//! information sections: every corpus file's sections decode, the
 //! R2018 files' sections re-encode byte for byte, older versions' values
 //! convert to the R2018 form and back, and the other auxiliary sections stay
 //! in the extra sections.

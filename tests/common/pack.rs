@@ -1,4 +1,4 @@
-//! The Task 26 sign-off pack: the drawings opendwg writes that a person
+//! The sign-off pack: the drawings opendwg writes that a person
 //! checks in AutoCAD (`examples/make_signoff.rs`, `scripts/make-signoff.sh`)
 //! and that the ODA File Converter oracle reads (`tests/oda.rs`).
 //!

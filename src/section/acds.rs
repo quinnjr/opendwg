@@ -39,8 +39,8 @@
 //!   file header, named by ODS's "previous save index") and "freesp"
 //!   segments, and leaves stale segments and records of earlier saves in
 //!   place. [`DataStorage::encode`] writes neither: previous save and free
-//!   space are 0, as in a fresh file. Task 26's oracle is to confirm AutoCAD
-//!   reads that layout.
+//!   space are 0, as in a fresh file. Unconfirmed against AutoCAD: whether
+//!   it reads that layout.
 //! - The data index lists records by schema, then handle; one handle may
 //!   have several records (AecObjects.dwg has two thumbnails for a block).
 //!   The search segment, which ODS describes, is derived from the records
@@ -915,9 +915,9 @@ impl DataStorage {
         }
     }
 
-    /// Change the handle records are keyed by, for a handle rewrite (Task
-    /// 25's helper must call this with the same mapping it applies to the
-    /// objects, so ACIS entities keep their data). `map` returns the new
+    /// Change the handle records are keyed by, for a handle rewrite: called
+    /// by `Drawing::rewrite_handles` (drawing/rewrite.rs) with the mapping it
+    /// applies to the objects, so ACIS entities keep their data. `map` returns the new
     /// handle, or `None` to keep it. Records are then put back in data
     /// index order (stably).
     ///

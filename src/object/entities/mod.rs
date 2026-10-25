@@ -163,6 +163,7 @@ pub(crate) mod tests {
                 rows: 3,
                 column_spacing: 1.0,
                 row_spacing: 2.0,
+                read_attrib_code: Default::default(),
             }),
             Entity::Attrib(Box::new(attrib())),
             Entity::MText(Box::new(mtext())),

@@ -572,6 +572,9 @@ fn read_reactors_xdict(r: &mut ObjReader) -> Result<(Vec<Handle>, Option<Handle>
         .map(|_| r.href_abs())
         .collect::<Result<Vec<_>>>()?;
     let xdict_missing = r.version >= Version::R2004 && r.data.read_b()?;
+    // A clear flag with a null handle reads as no extension dictionary and
+    // is written with the flag set: a non-canonical round trip (see
+    // `crate::object`).
     let xdict = if xdict_missing {
         None
     } else {

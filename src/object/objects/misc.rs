@@ -24,7 +24,7 @@ pub struct Group {
     pub selectable: i16,
     /// The entities (hard pointers). Each entity lists the group among its
     /// reactors; keeping the two sides consistent is a cross-object check
-    /// (Task 23's validator), not done here.
+    /// (`Drawing::validate`), not done here.
     pub entities: Vec<Handle>,
 }
 

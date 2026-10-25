@@ -245,15 +245,15 @@ impl LegacyTableStyle {
     /// right becomes edges 1, 0x20, 4, 8, 0x10, 2 in edge order). The flags
     /// (DXF 71) go to the first unknown `BL` (0 for both in the corpus).
     /// The constants in `r2010_defaults` fill the rest; they are checked
-    /// against the corpus only for its "Standard" style, so Task 26's
-    /// oracle is to confirm them.
+    /// against the corpus only for its "Standard" style; they are
+    /// unconfirmed against AutoCAD.
     ///
     /// The margin spacing (horizontal and vertical) and the "Table" cell
     /// style's text height are both 0.18 in the corpus's "Standard" style,
     /// which cannot tell them apart from the data row's text height (also
     /// 0.18). Both are taken from the data row's text height, the one
     /// legacy field they could plausibly follow; a style with another
-    /// height is unverified until Task 26's oracle.
+    /// height is unconfirmed against AutoCAD.
     ///
     /// The suppress-title and suppress-header flags have no known R2010
     /// field: a style with either set is an error (see

@@ -1,4 +1,4 @@
-//! Corpus checks of the basic, text and insert entities (Task 14): every
+//! Corpus checks of the basic, text and insert entities: every
 //! entity of these types decodes typed, the counts match the manifest, R2018
 //! entities re-encode bit for bit, and values that pin ODS deviations are
 //! asserted on real data.
@@ -13,7 +13,8 @@ use opendwg::object::{
 };
 use opendwg::{Drawing, Handle, Version};
 
-/// The Task 14 entity types, by type name, with their manifest count keys.
+/// The entity types checked here, by type name, with their manifest count
+/// keys.
 const TYPES: [(&str, &str); 20] = [
     ("LINE", "line_count"),
     ("POINT", "point_count"),
@@ -65,7 +66,7 @@ fn corpus_basic_entities_decode() {
             let Some((_, key)) = TYPES.iter().find(|(n, _)| *n == t) else {
                 continue;
             };
-            // SEQEND also ends polylines (Task 15); those are counted too.
+            // SEQEND also ends polylines (tests/polylines.rs); those are counted too.
             assert!(obj.raw().is_none(), "{name}: {h} {t} kept raw");
             *counts.entry(key).or_default() += 1;
         }

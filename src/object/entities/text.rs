@@ -570,7 +570,9 @@ pub struct MText {
     /// color, 0x10 text frame (R2018+); 0 before.
     pub background_flags: i32,
     /// The background fill, stored when `background_flags` has bit 0x01 (or,
-    /// from R2018, 0x10).
+    /// from R2018, 0x10). An older MTEXT with 0x10 and not 0x01 (a text
+    /// frame, no fill) stores none; it is read with the default data (scale
+    /// 1.5, `ByLayer`, transparency 0) so it can be written as R2018.
     pub background: Option<MTextBackground>,
     /// `Some` for an MTEXT that is not annotative (R2018+ files store the
     /// difference; from older files every MTEXT gets
@@ -650,6 +652,17 @@ impl MText {
                 scale: r.data.read_bd()?,
                 color: r.read_cmc()?,
                 transparency: r.data.read_bl()?,
+            })
+        } else if MText::has_background(background_flags, Version::R2018) {
+            // A text frame (0x10, from AutoCAD 2016, which writes R2013)
+            // without a fill: the file stores no data, R2018 stores it for
+            // either bit. Default data, the fill still off (0x01 clear), keep
+            // the frame AutoCAD shows; clearing 0x10 would lose it. The
+            // color is unused while the fill is off.
+            Some(MTextBackground {
+                scale: 1.5,
+                color: Color::ByLayer,
+                transparency: 0,
             })
         } else {
             None
@@ -1532,6 +1545,48 @@ pub(crate) mod tests {
         let bytes = w.finish(type_code::ATTRIB).unwrap();
         let err = Attrib::decode(&mut super::super::tests::reader(&bytes)).unwrap_err();
         assert!(err.to_string().contains("negative annotative"), "{err}");
+    }
+
+    /// An R2013 MTEXT with a text frame (0x10, AutoCAD 2016 and 2017) and no
+    /// fill stores no background data (R2013 stores it only for 0x01); R2018
+    /// stores it for either bit. Read, it gets the default data with the
+    /// fill still off, so it keeps its frame and is written as R2018.
+    #[test]
+    fn r2013_text_frame_converts_to_r2018() {
+        let m = mtext();
+        let mut w = ObjWriter::new(Handle(0x80));
+        let d = &mut w.data;
+        d.write_3bd(m.insertion);
+        d.write_3bd(m.extrusion);
+        d.write_3bd(m.x_axis_dir);
+        d.write_bd(m.rect_width);
+        d.write_bd(m.rect_height);
+        d.write_bd(m.text_height);
+        d.write_bs(m.attachment);
+        d.write_bs(m.drawing_dir);
+        d.write_bd(m.extents_height);
+        d.write_bd(m.extents_width);
+        w.text(&m.contents).unwrap();
+        put(&mut w, HARD_POINTER, m.style).unwrap();
+        w.data.write_bs(m.line_spacing_style);
+        w.data.write_bd(m.line_spacing_factor);
+        w.data.write_b(m.unknown_bit);
+        w.data.write_bl(0x10);
+        let bytes = w.finish(type_code::MTEXT).unwrap();
+        let (mut r, _) = ObjReader::split(&bytes, Version::R2013, 30).unwrap();
+        r.handle = Handle(0x80);
+        let back = MText::decode(&mut r).unwrap();
+        assert_eq!(r.data.remaining_bits(), 0);
+        assert_eq!(back.background_flags, 0x10);
+        assert_eq!(
+            back.background,
+            Some(MTextBackground {
+                scale: 1.5,
+                color: Color::ByLayer,
+                transparency: 0,
+            })
+        );
+        roundtrip(&back, MText::encode, MText::decode, type_code::MTEXT);
     }
 
     #[test]

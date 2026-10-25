@@ -7,6 +7,28 @@
 //! from 500 up by the DXF name of their class. Typed decoders ([`tables`],
 //! [`entities`], ...) are added per type; every other object decodes to
 //! `Unknown`.
+//!
+//! # Non-canonical round trips
+//!
+//! An R2018 object encoded again after [`decode_object`] decodes to the same
+//! value, and is the same bytes except where the source stored something in
+//! a form the encoder does not produce:
+//!
+//! - text whose stored length counts a trailing NUL (some writers, such as
+//!   ACadSharp, count a terminator): the NULs are dropped on read (see
+//!   [`ObjReader::text`]; extended data strings likewise), so the text is
+//!   written shorter;
+//! - an R2004+ object whose "no extension dictionary" flag is clear but
+//!   whose extension dictionary handle is null: read as no extension
+//!   dictionary, written with the flag set and no handle;
+//! - values stored in a longer form than needed (a `BS` 0 stored in full,
+//!   as AutoCAD 2025 writes some dimension fields): written in the
+//!   shortest form;
+//! - the end padding of a typed object's handle stream (fewer than 8 bits):
+//!   written as one bits, as AutoCAD pads. Raw objects keep theirs.
+//!
+//! The corpus tests allow such objects (at most one in fifty of a type per
+//! file) and check that they decode equal.
 
 pub mod common;
 pub mod entities;
@@ -498,11 +520,15 @@ impl NonGraphical {
 
     /// Whether the object can be written as R2018. Raw bits from R2000 and
     /// R2004 cannot, nor raw bits of a modeled type from before R2018 (see
-    /// [`raw_is_convertible`]); neither can an R2000 block record whose entity list has
-    /// not been built (see [`EntityList`]), a table entry whose xref
-    /// index R2018 cannot store (see [`TableEntry`]), a pre-R2010 table
-    /// style, a multiline style with a linetype index, or spatial index bits
-    /// read before R2007.
+    /// [`raw_is_convertible`]); neither can an object whose common data
+    /// could not be read ([`NonGraphical::Unreadable`]), an R2000 block
+    /// record whose entity list has not been built (see [`EntityList`]), a
+    /// table entry whose xref index R2018 cannot store (see [`TableEntry`]),
+    /// a pre-R2010 table style unless its title and header rows are both
+    /// suppressed (see `TableStyle::is_convertible`), a multiline style with
+    /// a linetype index, spatial index bits read before R2007, or an XRECORD
+    /// read before R2007 that keeps the bytes of an unknown item (see
+    /// [`XRecord::is_convertible`]).
     fn is_convertible(&self) -> bool {
         if self.table_entry().is_some_and(|e| !e.is_convertible()) {
             return false;
@@ -671,11 +697,14 @@ impl Entity {
 
     /// Whether the entity can be written as R2018. Raw bits from R2000 and
     /// R2004 cannot, nor raw bits of a modeled type from before R2018 (see
-    /// [`raw_is_convertible`]); neither can an R2000 insert or polyline whose attribute
-    /// or vertex list has not been built (see [`EntityList`]), nor an R2000
-    /// ACIS entity's SAT (see [`AcisEntity`]; other ACIS entities read
-    /// before R2013 are converted by the drawing writer, and fail to encode
-    /// alone).
+    /// [`raw_is_convertible`]); neither can an R2000 insert or polyline
+    /// whose attribute or vertex list has not been built (see
+    /// [`EntityList`]), a multileader with the arrowhead list stored up to
+    /// R2007 (see [`MultiLeader::is_convertible`]), nor an ACIS entity whose
+    /// data is SAT text, read before R2013 from any version (version 1 SAT
+    /// blocks, or inline data that is not SAB; see [`AcisEntity`]). Other
+    /// ACIS entities read before R2013 are converted by the drawing writer,
+    /// and fail to encode alone.
     fn is_convertible(&self) -> bool {
         if let Some(list) = self.polyline_vertices() {
             return matches!(list, EntityList::Owned(_));

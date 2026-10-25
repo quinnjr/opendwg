@@ -1,4 +1,4 @@
-//! Task 24: drawings created from scratch with [`Drawing::new`]. A new
+//! Drawings created from scratch with [`Drawing::new`]. A new
 //! drawing validates with no finding, saves, reads back with no diagnostic
 //! and the same model, and takes one entity of every kind the library
 //! models through the public API.
@@ -876,7 +876,8 @@ fn image_reactor_follows_the_image() {
     assert_eq!(d.validate(), vec![]);
 }
 
-/// Task 22's large-drawing test builds on `Drawing::new()`; this checks the
+/// The large-drawing test of tests/roundtrip.rs builds on `Drawing::new()`;
+/// this checks the
 /// same path at a small size: lines added to a new drawing save and read
 /// back.
 #[test]

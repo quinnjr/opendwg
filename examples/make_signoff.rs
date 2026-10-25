@@ -1,4 +1,4 @@
-//! Write the AutoCAD sign-off pack (Task 26): the drawings of
+//! Write the AutoCAD sign-off pack: the drawings of
 //! `tests/common/pack.rs`, the originals they were made from, untouched
 //! copies, and `SIGNOFF.md` filled in from `scripts/SIGNOFF-TEMPLATE.md`.
 //! Run it through `scripts/make-signoff.sh`:

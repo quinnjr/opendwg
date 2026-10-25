@@ -31,7 +31,7 @@
 //! A block record's insert list is a cache of the entities that use the
 //! block (AutoCAD lists ACAD_TABLEs there too): an added INSERT or MINSERT
 //! joins it and a removed entity leaves it, but other users added here do
-//! not join it; saving refreshes it (Task 22).
+//! not join it; saving refreshes it (`drawing::write`).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -2496,6 +2496,7 @@ mod tests {
                                 rows: 2,
                                 column_spacing: 1.0,
                                 row_spacing: 1.0,
+                                read_attrib_code: Default::default(),
                             }),
                         ),
                         attribs(1),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Write the AutoCAD sign-off pack (Task 26) into signoff/ (or the folder
+# Write the AutoCAD sign-off pack into signoff/ (or the folder
 # given): the drawings opendwg writes, the originals they came from,
 # untouched copies, and SIGNOFF.md, the checklist a person fills in while
 # checking each drawing in AutoCAD on Windows.

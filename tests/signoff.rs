@@ -1,4 +1,4 @@
-//! Task 26: the AutoCAD sign-off pack (`tests/common/pack.rs`, written by
+//! The AutoCAD sign-off pack (`tests/common/pack.rs`, written by
 //! `examples/make_signoff.rs`). Every drawing of the pack reads back with
 //! no diagnostic and validates; the edits carry what they claim; the
 //! generated SIGNOFF.md has every placeholder filled, a section per file,

@@ -1,4 +1,4 @@
-//! Task 20: the drawing's typed accessors and mutation API, on the R2018
+//! The drawing's typed accessors and mutation API, on the R2018
 //! corpus sample. After every mutation each touched object is encoded as
 //! R2018 and decoded back equal, and the cross-object structure (owner lists,
 //! table control entries, insert attributes, reactors, groups) has no
@@ -1140,6 +1140,7 @@ fn circular_block_references_refused_at_any_depth() {
         rows: 2,
         column_spacing: 1.0,
         row_spacing: 1.0,
+        read_attrib_code: Default::default(),
     });
     assert!(matches!(
         d.add_entity(c, EntityCommon::new(l0), minsert.clone()),
@@ -1170,6 +1171,7 @@ fn minsert_with_attribs() {
         rows: 2,
         column_spacing: 2.0,
         row_spacing: 2.0,
+        read_attrib_code: Default::default(),
     });
     let ms = d.model_space();
     let h = d

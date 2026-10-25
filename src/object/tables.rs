@@ -277,9 +277,9 @@ impl TableEntry {
 
     /// Whether R2018 can store the xref index: its one `BS` keeps bit 0x100
     /// for the dependent flag, so an index (read from a pre-R2007 file) with
-    /// that bit set, including any negative one, has no R2018 form.
-    /// [`super::encode_object`] refuses such an entry with
-    /// [`Error::UnconvertibleObjects`].
+    /// that bit set has no R2018 form; only that bit matters. Saving a
+    /// drawing with such an entry fails with [`Error::UnconvertibleObjects`],
+    /// and [`super::encode_object`] fails to encode it.
     pub fn is_convertible(&self) -> bool {
         self.xref_index & XREF_DEPENDENT == 0
     }

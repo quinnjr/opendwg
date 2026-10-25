@@ -1,4 +1,4 @@
-//! Task 23: `Drawing::validate`, the structural check run before every save.
+//! `Drawing::validate`, the structural check run before every save.
 //! Error findings stop `to_bytes`; warnings do not.
 
 mod common;
@@ -99,7 +99,7 @@ fn corpus_files_validate_clean() {
     }
 }
 
-/// Review Focus 3: an entity whose layer is changed through `get_mut` to a
+/// An entity whose layer is changed through `get_mut` to a
 /// handle no object has is an error naming the entity; saving is refused.
 #[test]
 fn validate_catches_dangling_layer() {
@@ -127,7 +127,7 @@ fn validate_catches_dangling_layer() {
     );
 }
 
-/// Review Focus 4: soft pointers and reactors to objects that do not exist
+/// Soft pointers and reactors to objects that do not exist
 /// are warnings; the drawing saves and keeps their values.
 #[test]
 fn soft_dangling_is_warning() {
