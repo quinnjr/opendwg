@@ -279,8 +279,9 @@ cargo +nightly fuzz run read_drawing -- -max_total_time=600 -rss_limit_mb=2048
 
 The targets:
 
-- whole files: `read_drawing`, `write_roundtrip` (read, write, read
-  again) and `container` (slicing into sections only);
+- whole files: `read_drawing`, `write_roundtrip` (read, write at a fixed
+  save time, read again: the written file must read back and validate with
+  no error) and `container` (slicing into sections only);
 - `object`: one object through `decode_object`, in any version, with the
   classes of the drawing it came from; what decodes is encoded as R2018,
   which must decode and re-encode to the same bytes. The seeder makes one
