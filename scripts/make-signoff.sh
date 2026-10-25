@@ -26,11 +26,13 @@ for arg in "$@"; do
 done
 out="${out:-$root/signoff}"
 
-# The corpus: every file of the manifest fetched.
+# The corpus: every file of both manifests fetched (the pack has every
+# main corpus file and a selection of the extended corpus).
 absent=""
 while read -r name; do
   [ -f "$root/corpus/files/$name.dwg" ] || absent="$absent $name"
-done < <(sed -n 's/^name = "\(.*\)"$/\1/p' "$root/corpus/manifest.toml" 2>/dev/null)
+done < <(sed -n 's/^name = "\(.*\)"$/\1/p' "$root/corpus/manifest.toml" \
+  "$root/corpus/extended.toml" 2>/dev/null)
 if [ -n "$absent" ] && [ "$partial" -ne 1 ]; then
   echo "make-signoff: the sample corpus is not fetched (missing:$absent)." >&2
   echo "Run scripts/fetch-corpus.sh first, or pass --allow-partial for a pack without it." >&2
@@ -67,7 +69,8 @@ cargo run --release --quiet --manifest-path "$root/Cargo.toml" \
 # Check the file list: the drawings every pack has, the checklist, and one
 # untouched copy per drawing.
 missing=0
-for f in SIGNOFF.md new_empty.dwg new_every_entity.dwg new_200k_lines.dwg edit_dimlfac.dwg; do
+for f in SIGNOFF.md new_empty.dwg new_every_entity.dwg new_200k_lines.dwg edit_dimlfac.dwg \
+  edit_mtext_frame.dwg; do
   if [ ! -s "$out/$f" ]; then
     echo "make-signoff: missing $f" >&2
     missing=1

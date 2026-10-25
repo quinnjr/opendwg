@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod every_entity;
+pub mod model;
 pub mod pack;
 pub mod remove;
 

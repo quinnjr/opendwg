@@ -27,9 +27,18 @@ fn expected_names() -> BTreeSet<String> {
         "new_every_entity.dwg",
         "new_200k_lines.dwg",
         "edit_dimlfac.dwg",
+        pack::MTEXT_FRAME_EDIT,
     ]
     .map(String::from)
     .into();
+    for (n, _) in pack::EXTENDED {
+        if common::corpus_file(n).is_some() {
+            names.insert(format!("extended_{n}.dwg"));
+        }
+    }
+    if common::corpus_file(pack::BODY_SOURCE).is_some() {
+        names.insert(pack::BODY_EDIT.into());
+    }
     let fetched = common::fetched_files();
     for (e, _) in &fetched {
         names.insert(format!("corpus_{}.dwg", e.name));
@@ -185,6 +194,10 @@ fn signoff_markdown_is_complete() {
     }
     all.insert("edit_table_style.dwg".into());
     all.insert(pack::RENUMBERED.into());
+    all.insert(pack::BODY_EDIT.into());
+    for (n, _) in pack::EXTENDED {
+        all.insert(format!("extended_{n}.dwg"));
+    }
     let named = quoted_dwg_names(TEMPLATE);
     assert!(!named.is_empty());
     let unknown: Vec<_> = named.difference(&all).collect();
@@ -268,4 +281,57 @@ fn guid_notes_name_the_written_guids() {
 fn unreadable_file_has_no_guid_note() {
     let err = pack::guid_note(b"AC1032 not a drawing").unwrap_err();
     assert!(err.contains("does not read back"), "{err}");
+}
+
+/// The BODY edit: the converted solid reads back as a BODY with its ACIS
+/// data in the data storage section and no history handle.
+#[test]
+fn body_edit_has_no_history() {
+    use opendwg::object::{AcisKind, AcisPayload};
+    let pack = small_pack();
+    let Some(f) = pack.files.iter().find(|f| f.name == pack::BODY_EDIT) else {
+        common::skip(pack::BODY_SOURCE);
+        return;
+    };
+    let d = Drawing::from_bytes(&f.bytes).unwrap();
+    let bodies: Vec<_> = d
+        .objects()
+        .filter_map(|(h, o)| match o {
+            Object::Entity {
+                entity: Entity::Acis(a),
+                ..
+            } if a.kind == AcisKind::Body => Some((h, a)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bodies.len(), 1);
+    let (h, a) = bodies[0];
+    assert_eq!(a.history, None);
+    assert!(matches!(a.payload, AcisPayload::DataStorage { .. }));
+    assert!(d.acis_data(h).is_some_and(|x| !x.is_empty()));
+}
+
+/// The MTEXT frame edit: one MTEXT with flags 0x10 and the default
+/// background data, one with neither.
+#[test]
+fn mtext_frame_edit_keeps_the_frame() {
+    let pack = small_pack();
+    let f = pack
+        .files
+        .iter()
+        .find(|f| f.name == pack::MTEXT_FRAME_EDIT)
+        .unwrap();
+    let d = Drawing::from_bytes(&f.bytes).unwrap();
+    let mut flags: Vec<(i32, bool)> = d
+        .objects()
+        .filter_map(|(_, o)| match o {
+            Object::Entity {
+                entity: Entity::MText(m),
+                ..
+            } => Some((m.background_flags, m.background.is_some())),
+            _ => None,
+        })
+        .collect();
+    flags.sort();
+    assert_eq!(flags, [(0, false), (0x10, true)]);
 }

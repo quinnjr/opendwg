@@ -6,18 +6,80 @@
 //!   R2004) with the objects R2018 cannot hold removed through the API;
 //! - new drawings: an empty one, one with an entity of every kind, one with
 //!   200k lines;
+//! - representative files of the extended corpus ([`EXTENDED`]): other
+//!   writers, xrefs, GBK text, and the files whose writing needed a repair
+//!   or a reading choice no AutoCAD file confirms;
 //! - edits whose result is unverified: a converted pre-R2010 table style
-//!   whose data text height is not 0.18, and a dimension under a style whose
-//!   DIMLFAC is not 1, edited after a read.
+//!   whose data text height is not 0.18, a dimension under a style whose
+//!   DIMLFAC is not 1, edited after a read, an R2004 solid made a BODY
+//!   (written without a history handle), and an MTEXT with a text frame
+//!   and no fill (the default background data the reader gives an R2013
+//!   one).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use opendwg::object::{DimKind, Entity, EntityCommon, Line, NonGraphical, Object, TableStyle};
+use opendwg::object::{
+    AcisKind, DimKind, Entity, EntityCommon, Line, MText, MTextBackground, NonGraphical, Object,
+    TableStyle,
+};
 use opendwg::{Drawing, Handle, Severity, Version};
 
 use super::every_entity::{dimension, with_every_entity};
 use super::remove::remove_all;
+
+/// The extended corpus files in the pack (`extended_<name>.dwg`), with what
+/// each one shows.
+pub const EXTENDED: [(&str, &str); 11] = [
+    (
+        "camber-01",
+        "a Civil 3D 2023 drawing: its Civil 3D objects (alignments, profiles, styles) are \
+         kept as stored",
+    ),
+    (
+        "camber-24",
+        "the drawing `extended_camber-26.dwg` attaches as the xref Xref01",
+    ),
+    (
+        "camber-26",
+        "a Civil 3D drawing that attaches `camber-24` as the xref Xref01, with the \
+         `Xref01|...` layers it brings",
+    ),
+    (
+        "cc-12",
+        "an AutoCAD 2000 file from another program with an unloaded xref \"Level 1\" \
+         (`..\\plans\\Level 1.dwg`, which is `extended_cc-13.dwg`); it lacked the \
+         ACAD_PLOTSETTINGS dictionary, which opendwg added",
+    ),
+    (
+        "cc-13",
+        "the xref target of `extended_cc-12.dwg`, from another program",
+    ),
+    (
+        "dsh-01",
+        "an AutoCAD 2000 file written by SolidWorks with Chinese (GBK) layer names; it \
+         lacked the dimension style Standard, which opendwg added",
+    ),
+    ("cc-16", "an AutoCAD 2007 file written by the ODA SDK"),
+    (
+        "brx-01",
+        "a BricsCAD drawing; it lacked the dimension style Standard, which opendwg added",
+    ),
+    (
+        "cc-11",
+        "an AutoCAD 2018 file written by the ODA SDK, with a 3D solid and a BODY (a BODY \
+         is written without a solid history link, as the ODA SDK stores it)",
+    ),
+    (
+        "arx-02",
+        "an AutoCAD 2002 sample whose dimension style's round-trip dictionary had no \
+         owner; opendwg sets it",
+    ),
+    (
+        "adsk-house-01",
+        "an AutoCAD 2025 house model (large); its named views store no UCS",
+    ),
+];
 
 /// The line count of `new_200k_lines.dwg`.
 pub const LINES: usize = 200_000;
@@ -200,6 +262,63 @@ pub fn corpus_files(pack: &mut Pack) {
     }
 }
 
+/// The [`EXTENDED`] files written as R2018 (`extended_<name>.dwg`), the
+/// objects R2018 cannot hold removed first; a file not fetched is listed as
+/// skipped.
+pub fn extended_files(pack: &mut Pack) {
+    let entries = super::load_extended().file;
+    for (n, about) in EXTENDED {
+        let name = format!("extended_{n}.dwg");
+        let Some(path) = super::corpus_file(n) else {
+            pack.skipped.push((
+                name,
+                "the extended corpus is not fetched: run scripts/fetch-corpus.sh".into(),
+            ));
+            continue;
+        };
+        let version = entries
+            .iter()
+            .find(|e| e.name == n)
+            .map_or("", |e| e.version.as_str());
+        let mut d = match Drawing::open(&path) {
+            Ok(d) => d,
+            Err(err) => {
+                pack.skipped.push((name, format!("cannot be read: {err}")));
+                continue;
+            }
+        };
+        let mut expected = Vec::new();
+        let unconvertible = d.unconvertible_objects();
+        if !unconvertible.is_empty() {
+            expected.push(format!(
+                "Missing on purpose, so not a fail: {}. opendwg cannot yet write these as \
+                 AutoCAD 2018 and removed them before saving (technical list: {}).",
+                visible_losses(&unconvertible),
+                count_by_type(&unconvertible)
+            ));
+            remove_all(&mut d, &unconvertible, n);
+        }
+        let what = format!(
+            "The public sample `{n}` ({}): {about}. Opened and saved as AutoCAD 2018 by \
+             opendwg.",
+            release(version)
+        );
+        match write(&d) {
+            Ok((bytes, notes)) => {
+                expected.extend(notes);
+                pack.files.push(PackFile {
+                    name,
+                    bytes,
+                    kind: Kind::Corpus(path),
+                    what,
+                    expected,
+                });
+            }
+            Err(err) => pack.skipped.push((name, format!("does not save: {err}"))),
+        }
+    }
+}
+
 /// A new drawing with `n` lines in model space, one unit apart.
 pub fn lines_drawing(n: usize) -> Drawing {
     let mut d = Drawing::new();
@@ -302,6 +421,18 @@ pub fn edit_files(pack: &mut Pack) {
         Ok(f) => pack.files.push(f),
         Err(e) => pack.skipped.push(("edit_dimlfac.dwg".into(), e)),
     }
+    match body_edit() {
+        Ok(Some(f)) => pack.files.push(f),
+        Ok(None) => pack.skipped.push((
+            BODY_EDIT.into(),
+            format!("the corpus lacks {BODY_SOURCE}: run scripts/fetch-corpus.sh"),
+        )),
+        Err(e) => pack.skipped.push((BODY_EDIT.into(), e)),
+    }
+    match mtext_frame_edit() {
+        Ok(f) => pack.files.push(f),
+        Err(e) => pack.skipped.push((MTEXT_FRAME_EDIT.into(), e)),
+    }
     match renumbered_edit() {
         Ok(Some(f)) => pack.files.push(f),
         Ok(None) => pack.skipped.push((
@@ -310,6 +441,93 @@ pub fn edit_files(pack: &mut Pack) {
         )),
         Err(e) => pack.skipped.push((RENUMBERED.into(), e)),
     }
+}
+
+/// The corpus file the BODY edit starts from: an R2004 drawing whose 3D
+/// solids hold SAB data the writer converts.
+pub const BODY_SOURCE: &str = "acadsharp-sample-ac1018";
+
+/// The file name of the BODY edit.
+pub const BODY_EDIT: &str = "edit_body_ac1018.dwg";
+
+/// The file name of the MTEXT frame edit.
+pub const MTEXT_FRAME_EDIT: &str = "edit_mtext_frame.dwg";
+
+/// [`BODY_SOURCE`] with its first 3D solid made a BODY: written as R2018,
+/// the BODY has its data in the data storage section and no history handle
+/// (as the ODA SDK writes a BODY; no AutoCAD BODY confirms it).
+fn body_edit() -> Result<Option<PackFile>, String> {
+    let Some(path) = super::corpus_file(BODY_SOURCE) else {
+        return Ok(None);
+    };
+    let mut d = Drawing::open(&path).map_err(|e| e.to_string())?;
+    let unconvertible = d.unconvertible_objects();
+    remove_all(&mut d, &unconvertible, BODY_SOURCE);
+    let solid = d
+        .objects()
+        .find(|(_, o)| {
+            matches!(o, Object::Entity { entity: Entity::Acis(a), .. }
+                if a.kind == AcisKind::Solid3d && a.is_convertible())
+        })
+        .map(|(h, _)| h)
+        .ok_or("no convertible 3D solid")?;
+    if let Some((_, Entity::Acis(a))) = d.entity_mut(solid) {
+        a.kind = AcisKind::Body;
+        a.history = None;
+    }
+    let (bytes, notes) = write(&d)?;
+    let mut expected = vec![format!(
+        "Looks like `corpus_{BODY_SOURCE}.dwg`; the 3D solid {solid} is now a body: `LIST` \
+         on it says BODY, and it keeps its shape (S10)."
+    )];
+    expected.extend(notes);
+    Ok(Some(PackFile {
+        name: BODY_EDIT.into(),
+        bytes,
+        kind: Kind::Edit(Some(path)),
+        what: format!(
+            "The public sample `{BODY_SOURCE}` (AutoCAD 2004) with one 3D solid changed by \
+             opendwg into a body (an ACIS BODY), the other objects as in the sample."
+        ),
+        expected,
+    }))
+}
+
+/// A new drawing with two MTEXTs: one with a text frame and no fill (flags
+/// 0x10, the default background data the reader gives an R2013 MTEXT with
+/// a frame), one with neither.
+fn mtext_frame_edit() -> Result<PackFile, String> {
+    let mut d = Drawing::new();
+    let ms = d.model_space();
+    let l0 = d.layer_by_name("0").ok_or("no layer 0")?;
+    let mut framed = MText::new([0.0, 10.0, 0.0], 2.5, 40.0, "Framed, no fill");
+    framed.background_flags = 0x10;
+    framed.background = Some(MTextBackground {
+        scale: 1.5,
+        color: opendwg::Color::ByLayer,
+        transparency: 0,
+    });
+    let plain = MText::new([0.0, 0.0, 0.0], 2.5, 40.0, "No frame, no fill");
+    for m in [framed, plain] {
+        d.add_entity(ms, EntityCommon::new(l0), Entity::MText(Box::new(m)))
+            .map_err(|e| e.to_string())?;
+    }
+    let (bytes, notes) = write(&d)?;
+    let mut expected = vec![
+        "The upper text \"Framed, no fill\" has a rectangular frame around it and no \
+         background colour; the lower one has neither (S11)."
+            .into(),
+    ];
+    expected.extend(notes);
+    Ok(PackFile {
+        name: MTEXT_FRAME_EDIT.into(),
+        bytes,
+        kind: Kind::Edit(None),
+        what: "A new drawing with two multiline texts: the upper one with a text frame and \
+               no background fill, the lower one plain."
+            .into(),
+        expected,
+    })
 }
 
 /// The corpus file the renumbering edit starts from: an R2010 drawing with
@@ -472,6 +690,7 @@ fn dimlfac_edit() -> Result<PackFile, String> {
 pub fn build(lines: usize) -> Pack {
     let mut pack = Pack::default();
     corpus_files(&mut pack);
+    extended_files(&mut pack);
     new_files(&mut pack, lines);
     edit_files(&mut pack);
     pack

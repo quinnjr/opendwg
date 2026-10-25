@@ -283,6 +283,59 @@ Then open `corpus_acadsharp-sample-ac1021.dwg`,
 |---|---|---|
 | | | |
 
+### S10. Bodies written without a history link
+
+opendwg writes an ACIS body (BODY) with no "solid history" link, as the ODA
+SDK stores one; no AutoCAD file confirms it.
+
+1. Open `edit_body_ac1018.dwg`. Type `LIST`, click the solid the "Expected"
+   note names (or select all with `ALL` and look for BODY in the list).
+2. Open `extended_cc-11.dwg` and do the same for its body.
+
+Look for: `LIST` says BODY, the body shows its shape (use `VSCURRENT`,
+`Realistic` to see it shaded), and `AUDIT` (check 2) found 0 errors.
+
+| File | Result (Pass / Fail) | Notes |
+|---|---|---|
+| `edit_body_ac1018.dwg` | | |
+| `extended_cc-11.dwg` | | |
+
+### S11. A text frame without a fill
+
+An AutoCAD 2016 or 2017 drawing can give a multiline text a frame without a
+background fill; opendwg writes it with default fill settings, fill off.
+
+1. Open `edit_mtext_frame.dwg` and type `ZOOM`, then `E`.
+2. Double-click the upper text and look at the **Text Frame** and
+   **Background Mask** buttons of the text editor ribbon.
+
+Look for: a frame around the upper text only; Text Frame on and no
+background mask for it.
+
+| Result (Pass / Fail) | Notes |
+|---|---|
+| | |
+
+### S12. Drawings from other programs, and what opendwg added to them
+
+1. `extended_brx-01.dwg` and `extended_dsh-01.dwg`: type `DIMSTYLE`. Look
+   for a style named Standard in the list (opendwg added it).
+2. `extended_cc-12.dwg`: type `PAGESETUP` (opens with no message); type
+   `XREF` and look for "Level 1" (shown as not found: its file is not next
+   to the drawing).
+3. `extended_camber-26.dwg`: copy `extended_camber-24.dwg` next to it,
+   renamed to the file name the `XREF` palette shows for Xref01, then
+   reload Xref01. Look for its layers `Xref01|...` and its objects.
+4. `extended_dsh-01.dwg`: type `LAYER` and look for layer names in Chinese
+   characters (for example 轮廓实线层).
+
+| Step | Result (Pass / Fail) | Notes |
+|---|---|---|
+| 1 | | |
+| 2 | | |
+| 3 | | |
+| 4 | | |
+
 ### S9. Things AutoCAD does not show
 
 Some choices sit in parts of the file that no AutoCAD command shows: the
@@ -313,7 +366,7 @@ results, the drawings AutoCAD saved in check 4, any screenshots, and the
 
 ## For the developer: what each check covers
 
-Unverified decisions behind these checks (from Tasks 11-25):
+Unverified decisions behind these checks:
 
 | Decision | Covered by |
 |---|---|
@@ -331,4 +384,7 @@ Unverified decisions behind these checks (from Tasks 11-25):
 | Insert lists, class counts, object order kept as read; R2000 VP_ENT_HDR table dropped | not visible as such (S9): checks 2-4 on the corpus files |
 | Re-encoding with canonical (shortest) forms where AutoCAD used others (pattern (c), 2% tolerance) | checks 2-4 on the corpus files |
 | Near-linear writing of large drawings | S8 |
+| BODY written without a history handle (ODA SDK evidence only); ACIS BODY converted from R2004 | S10 |
+| MTEXT text frame without fill given default background data | S11 |
+| Writer repairs (Standard dimension style, ACAD_PLOTSETTINGS, null owners, entity owners), xref blocks without an owned count, VIEWs without UCS handles, GBK text, other writers' files | S12, checks 1-4 on the `extended_*.dwg` files |
 | ODA File Converter local opt-in only (`tests/oda.rs`); CI relies on the validator and this manual check | this whole checklist |

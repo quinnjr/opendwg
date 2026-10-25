@@ -15,7 +15,7 @@
 
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use opendwg::object::{Entity, Object};
@@ -176,6 +176,28 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
             "{added} objects added, {repairs} repairs announced"
         ));
     }
+    // Every object kept reads back with its value, the documented writer
+    // refreshes aside (see `common::model::undo_refreshes`).
+    let warned: HashSet<Handle> = warnings.iter().filter_map(|w| w.handle).collect();
+    let mut differ = Vec::new();
+    for (h, o) in d.objects() {
+        let Some(b) = back.get(h) else { continue };
+        let b = common::model::undo_refreshes(&d, &back, o, b, &warned);
+        if !common::model::same_object(&d, h, o, &b) {
+            let shown = match common::model::as_r2018(&d, h, o) {
+                Ok(x) => common::model::debug_diff(&x, &b),
+                Err(e) => e,
+            };
+            differ.push(format!("{} {h}: {shown}", o.type_name()));
+        }
+    }
+    if !differ.is_empty() {
+        return Err(format!(
+            "{} objects read back changed: {}",
+            differ.len(),
+            differ[..differ.len().min(2)].join("\n")
+        ));
+    }
     // A second save keeps every object.
     let again = Drawing::from_bytes(&back.to_bytes().map_err(|x| format!("save 2: {x}"))?)
         .map_err(|x| format!("reopen 2: {x}"))?;
@@ -186,10 +208,13 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
     Ok(format!("round trip, {} objects", back.objects().count()))
 }
 
-/// Every extended corpus file, on a few threads; a debug build skips files
-/// over 2 MB (run the corpus tests with `--release`).
+/// Every extended corpus file, on a few threads. A debug build skips files
+/// over 2 MB (they take minutes there), with a printed note; with
+/// `OPENDWG_REQUIRE_CORPUS=1` it fails instead: the corpus must then be
+/// tested with `--release`.
 #[test]
 fn every_extended_file_opens_validates_and_saves() {
+    let required = std::env::var("OPENDWG_REQUIRE_CORPUS").as_deref() == Ok("1");
     let files: Vec<(common::Entry, PathBuf)> = common::load_extended()
         .file
         .into_iter()
@@ -197,6 +222,12 @@ fn every_extended_file_opens_validates_and_saves() {
         .filter(|(e, p)| {
             let big = std::fs::metadata(p).map_or(0, |m| m.len()) > 2_000_000;
             if big && cfg!(debug_assertions) {
+                assert!(
+                    !required,
+                    "OPENDWG_REQUIRE_CORPUS=1 in a debug build: {} (over 2 MB) would be \
+                     skipped; run the corpus tests with --release",
+                    e.name
+                );
                 eprintln!("SKIPPED in a debug build: {} (over 2 MB)", e.name);
             }
             !(big && cfg!(debug_assertions))
