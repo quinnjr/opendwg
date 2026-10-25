@@ -208,7 +208,6 @@ fn expected_unconvertible(name: &str) -> BTreeMap<&'static str, usize> {
         ("REGION", 1),
         ("TABLECONTENT", 2),
         ("TABLEGEOMETRY", 2),
-        ("VISUALSTYLE", 24),
     ];
     let mut list: BTreeMap<&str, usize> = match name {
         "acadsharp-sample-ac1015" | "acadsharp-sample-ac1018" => {
@@ -704,10 +703,15 @@ fn r2000_conversion() {
     assert_eq!(headers.len(), 4);
     let unconvertible = d.unconvertible_objects();
     remove_all(&mut d, &unconvertible, "ac1015");
+    // The only warnings: the 24 visual styles of the R2000 layout, written
+    // as AutoCAD's standard styles of their names.
+    let diags = d.write_diagnostics();
+    assert_eq!(diags.len(), 24, "{diags:?}");
     assert!(
-        d.write_diagnostics().is_empty(),
-        "{:?}",
-        d.write_diagnostics()
+        diags
+            .iter()
+            .all(|x| x.message.contains("VISUALSTYLE") && x.message.contains("standard style")),
+        "{diags:?}"
     );
     let back = roundtrip(&d, "ac1015");
     for h in headers {

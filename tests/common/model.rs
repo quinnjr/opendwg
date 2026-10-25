@@ -97,14 +97,27 @@ pub fn debug_diff(a: &Object, b: &Object) -> String {
 /// dimension style (`brx-*`, `geo7-01`, `ezdxf-04`, `dsh-*`, `gdal-03`..),
 /// civilcraft's writer without `ACAD_PLOTSETTINGS` (`cc-06/08/09/12/13`),
 /// AutoCAD 2002/2004's null-owner round-trip dictionaries (`arx-02/03`),
-/// and the ODA-based `gdal-02`'s data storage flags.
+/// and the ODA-based `gdal-02`'s data storage flags. Returns both, `o`
+/// without the dictionary entries of objects the writer leaves out.
 pub fn undo_refreshes(
     d: &Drawing,
     back: &Drawing,
     o: &Object,
     b: &Object,
     warned: &HashSet<Handle>,
-) -> Object {
+) -> (Object, Object) {
+    let mut o = o.clone();
+    // Entries for objects the writer leaves out (an absorbed pre-R2010
+    // CELLSTYLEMAP) are dropped from their dictionary.
+    if let Object::Other {
+        object: NonGraphical::Dictionary(x),
+        ..
+    } = &mut o
+    {
+        x.entries
+            .retain(|&(_, e)| e.0 == 0 || d.get(e).is_none() || back.get(e).is_some());
+    }
+    let o = &o;
     let mut b = b.clone();
     let known = |h: Handle| h.0 == 0 || d.get(h).is_some();
     match &mut b {
@@ -133,5 +146,5 @@ pub fn undo_refreshes(
     if b.object_common().has_ds_binary_data == has_record {
         b.object_common_mut().has_ds_binary_data = o.object_common().has_ds_binary_data;
     }
-    b
+    (o.clone(), b)
 }

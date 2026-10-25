@@ -37,6 +37,30 @@ pub struct RawObject {
 }
 
 impl RawObject {
+    /// The first text field of the object's own data (after the common
+    /// data), as its source version stores it: code page bytes in the data
+    /// stream before R2007, UTF-16 in the string stream from R2007. `None`
+    /// when it does not read.
+    pub(crate) fn first_text(&self, codepage: u16) -> Option<String> {
+        use crate::bits::BitReader;
+        let data = BitReader::with_bit_limit(&self.data, self.data_bits);
+        let strings = self
+            .strings
+            .as_ref()
+            .map(|(b, bits)| BitReader::with_bit_limit(b, *bits));
+        if self.source_version >= Version::R2007 && strings.is_none() {
+            return None;
+        }
+        let mut r = ObjReader::from_streams(
+            data,
+            strings,
+            BitReader::new(&[]),
+            self.source_version,
+            codepage,
+        );
+        r.text().ok()
+    }
+
     /// Keep the rest of each stream of `r`, which the caller has read up to
     /// the end of the common data.
     pub fn decode(

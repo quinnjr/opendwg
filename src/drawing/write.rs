@@ -53,6 +53,14 @@
 //!   - an object listed as owned (an extension dictionary, an entry of a
 //!     hard-owner dictionary) that stores a null owner gets its lister as
 //!     owner, with a warning (AutoCAD 2002's R14 round-trip data);
+//!   - an entity exactly one block record lists, whose owner names another
+//!     object, gets that block as owner (and entity mode), with a warning;
+//!   - a VISUALSTYLE stored in a layout older than R2018's (read before
+//!     R2013 without the marker of one AutoCAD saved in its older layout,
+//!     which is copied): replaced by an R2018 VISUALSTYLE with AutoCAD's
+//!     standard values for its name (compared without case), or
+//!     2dWireframe's values under a custom name, keeping its handle and
+//!     common data, with a warning each;
 //!   - `has_ds_binary_data` in each object's common data, derived: set
 //!     exactly on the objects with a record in the data storage section as
 //!     written (a converted ACIS entity gets it, an emptied one loses it).
@@ -397,6 +405,8 @@ impl Drawing {
     /// [`crate::object::AcisEntity`]), and the other typed values R2018 has
     /// no form for (see [`Object`]). A plot view named after no VIEW is not
     /// listed: saving clears it, with a warning ([`Drawing::write_diagnostics`]).
+    /// A VISUALSTYLE in an older layout is not listed either: the writer
+    /// replaces it (see the module documentation).
     /// Objects the writer leaves out (a CELLSTYLEMAP absorbed by its
     /// converted table style, the R2000 VP_ENT_HDR table) are not listed,
     /// except a VP_ENT_HDR or its control that has an extension dictionary or
@@ -406,7 +416,10 @@ impl Drawing {
         self.objects
             .iter()
             .filter(|(h, o)| {
-                (!o.is_convertible() && !drops.dropped.contains(h)) || drops.blocked.contains(h)
+                (!o.is_convertible()
+                    && !drops.dropped.contains(h)
+                    && !Self::replaced_visual_style(o))
+                    || drops.blocked.contains(h)
             })
             .map(|(&h, o)| (h, o.type_name().into_owned()))
             .collect()
@@ -797,7 +810,79 @@ impl Drawing {
         self.refresh_plot_views(&mut changes);
         self.refresh_null_owners(&mut changes);
         self.refresh_entity_owners(&mut changes);
+        self.refresh_visual_styles(&mut changes);
         changes
+    }
+
+    /// Whether `obj` is a VISUALSTYLE the writer replaces (step 2): a raw one
+    /// in a layout older than R2018's (read before R2013, without the marker
+    /// of one AutoCAD saved in its older layout, see
+    /// `object::saved_by_object_version`), which cannot be copied.
+    fn replaced_visual_style(obj: &Object) -> bool {
+        matches!(obj, Object::Other {
+            object: NonGraphical::Unknown(r),
+            ..
+        } if r.class_name.as_deref() == Some("VISUALSTYLE"))
+            && !obj.is_convertible()
+    }
+
+    /// Replace each VISUALSTYLE [`Drawing::replaced_visual_style`] names by
+    /// an R2018 one, with a warning: AutoCAD's standard style of its name
+    /// (compared without case), or `2dWireframe`'s values under its own
+    /// name. Its handle and common data (owner, reactors, extension
+    /// dictionary, extended data) stay, so the views, viewports and VPORTs
+    /// naming it keep a valid reference. The name is the object's own text,
+    /// else its owner dictionary's entry for it.
+    fn refresh_visual_styles(&self, changes: &mut Changes) {
+        let codepage = self.header.dwgcodepage;
+        for (&h, obj) in &self.objects {
+            if !Self::replaced_visual_style(obj) {
+                continue;
+            }
+            let Object::Other {
+                common,
+                object: NonGraphical::Unknown(raw),
+            } = obj
+            else {
+                continue;
+            };
+            let listed = || match self.objects.get(&common.owner) {
+                Some(Object::Other {
+                    object: NonGraphical::Dictionary(d),
+                    ..
+                }) => d
+                    .entries
+                    .iter()
+                    .find(|&&(_, e)| e == h)
+                    .map(|(n, _)| n.clone()),
+                _ => None,
+            };
+            let name = raw
+                .first_text(codepage)
+                .filter(|n| !n.is_empty())
+                .or_else(listed)
+                .unwrap_or_else(|| "2dWireframe".into());
+            let style = super::new::standard_visual_style(&name);
+            let standard = super::new::is_standard_visual_style(&name);
+            let message = format!(
+                "VISUALSTYLE {h} \"{name}\" is stored in the layout of {:?}, which R2018 cannot \
+                 hold; it is written as {}",
+                raw.source_version,
+                if standard {
+                    "AutoCAD's standard style of that name"
+                } else {
+                    "a style with 2dWireframe's settings under its own name"
+                }
+            );
+            changes.replaced.insert(
+                h,
+                Object::Other {
+                    common: common.clone(),
+                    object: NonGraphical::VisualStyle(Box::new(style)),
+                },
+            );
+            changes.warnings.push(warning(Some(h), message));
+        }
     }
 
     /// The entities exactly one block record lists whose owner (stored, or
@@ -2888,6 +2973,78 @@ mod tests {
                 .any(|x| x.message.contains("cannot be laid out"))
         );
         assert!(d.to_bytes().is_err());
+    }
+
+    /// A VISUALSTYLE in an R2007 layout (raw, without the "saved by object
+    /// version" marker) is not listed as unconvertible: the writer replaces
+    /// it by AutoCAD's standard style of its name (without case), or by
+    /// 2dWireframe's values under a custom name, keeping its handle and
+    /// common data, with a warning each. The drawing keeps the raw object.
+    #[test]
+    fn old_visual_styles_are_replaced_at_save() {
+        use crate::bits::BitWriter;
+        use crate::object::RawObject;
+        let mut d = Drawing::new();
+        let styles: Vec<Handle> = d
+            .objects
+            .iter()
+            .filter(|(_, o)| o.type_name() == "VISUALSTYLE")
+            .map(|(&h, _)| h)
+            .take(2)
+            .collect();
+        for (&h, name) in styles.iter().zip(["realistic", "My Style"]) {
+            let mut sw = BitWriter::new();
+            sw.write_tu(name).unwrap();
+            let bits = sw.bit_len();
+            let raw = RawObject {
+                type_code: 500,
+                class_name: Some("VISUALSTYLE".into()),
+                source_version: Version::R2007,
+                data: vec![0x55],
+                data_bits: 7,
+                strings: Some((sw.into_bytes(), bits)),
+                handles: Vec::new(),
+                tail_handles_raw: Vec::new(),
+                tail_handle_bits: 0,
+            };
+            if let Some(Object::Other { object, .. }) = d.objects.get_mut(&h) {
+                *object = NonGraphical::Unknown(raw);
+            }
+        }
+        d.ref_index = Default::default();
+        assert!(d.unconvertible_objects().is_empty());
+        let before: Vec<Object> = styles.iter().map(|h| d.objects[h].clone()).collect();
+        let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+        let named: Vec<Option<Handle>> = warnings.iter().map(|w| w.handle).collect();
+        assert_eq!(named, styles.iter().map(|&h| Some(h)).collect::<Vec<_>>());
+        assert!(warnings[0].message.contains("standard style"));
+        assert!(warnings[1].message.contains("2dWireframe"));
+        let back = Drawing::from_bytes(&bytes).unwrap();
+        assert!(back.diagnostics().is_empty(), "{:?}", back.diagnostics());
+        assert!(back.validate().is_empty(), "{:?}", back.validate());
+        let wireframe = super::super::new::standard_visual_style("2dWireframe");
+        let realistic = super::super::new::standard_visual_style("Realistic");
+        for ((h, was), (name, like)) in styles
+            .iter()
+            .zip(&before)
+            .zip([("realistic", realistic), ("My Style", wireframe)])
+        {
+            let Some(Object::Other {
+                common,
+                object: NonGraphical::VisualStyle(v),
+            }) = back.get(*h)
+            else {
+                panic!("{h} not an R2018 visual style");
+            };
+            assert_eq!(common, was.object_common());
+            assert_eq!(v.name, name);
+            assert_eq!(
+                (v.style_type, &v.properties),
+                (like.style_type, &like.properties)
+            );
+        }
+        // The drawing itself keeps the raw objects.
+        assert!(styles.iter().all(|h| d.objects[h].raw().is_some()));
     }
 
     #[test]

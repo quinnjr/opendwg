@@ -182,7 +182,23 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
     let mut differ = Vec::new();
     for (h, o) in d.objects() {
         let Some(b) = back.get(h) else { continue };
-        let b = common::model::undo_refreshes(&d, &back, o, b, &warned);
+        // A VISUALSTYLE in an older layout is replaced by an R2018 one at
+        // save, with a warning: same handle and common data, typed.
+        if o.raw().is_some() && o.type_name() == "VISUALSTYLE" && warned.contains(&h) {
+            let typed = matches!(
+                b,
+                Object::Other {
+                    object: opendwg::object::NonGraphical::VisualStyle(_),
+                    ..
+                }
+            );
+            if !typed || b.object_common() != o.object_common() {
+                differ.push(format!("VISUALSTYLE {h}: not replaced as documented"));
+            }
+            continue;
+        }
+        let (o, b) = common::model::undo_refreshes(&d, &back, o, b, &warned);
+        let o = &o;
         if !common::model::same_object(&d, h, o, &b) {
             let shown = match common::model::as_r2018(&d, h, o) {
                 Ok(x) => common::model::debug_diff(&x, &b),

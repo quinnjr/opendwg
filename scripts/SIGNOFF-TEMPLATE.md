@@ -336,6 +336,31 @@ background mask for it.
 | 3 | | |
 | 4 | | |
 
+### S13. Visual styles of older drawings
+
+opendwg cannot copy the visual styles of drawings saved by AutoCAD 2000 to
+2012 (and by other programs in those formats): it writes AutoCAD's standard
+settings under each style's name instead. The views and viewports keep
+their style.
+
+1. Open `corpus_acadsharp-sample-ac1015.dwg`, `corpus_acadsharp-sample-ac1018.dwg`
+   and `extended_cc-16.dwg` in turn (their "Expected" notes list the styles
+   replaced).
+2. Type `VISUALSTYLES`: the palette lists the styles (2D Wireframe,
+   Conceptual, Realistic, ...). Double-click "Conceptual" and "Realistic":
+   the view turns shaded; then "2D Wireframe" again.
+3. In each layout tab, double-click inside a viewport and look at the
+   visual style control at its top left: it names a style of the palette.
+
+Look for: no error message; the palette's styles show and apply as in a
+new drawing.
+
+| File | Result (Pass / Fail) | Notes |
+|---|---|---|
+| `corpus_acadsharp-sample-ac1015.dwg` | | |
+| `corpus_acadsharp-sample-ac1018.dwg` | | |
+| `extended_cc-16.dwg` | | |
+
 ### S9. Things AutoCAD does not show
 
 Some choices sit in parts of the file that no AutoCAD command shows: the
@@ -381,6 +406,7 @@ Unverified decisions behind these checks:
 | Dimensions written without a `*D` block; ARC_DIMENSION and LARGE_RADIAL_DIMENSION class definitions; the 17-class list of new drawings | S6, checks 1-2 on `new_every_entity.dwg` |
 | New-drawing object set (every template object table): no FBXASSET, materials, visual styles, section/detail view styles, scale list (33), PLOTSETTINGS class, layouts, the variable dictionary values | S7 (managers, counts, and the variable table) |
 | Pre-R2018 VISUALSTYLE copied as marked; section/detail view styles missing the BS 70 field before R2018 | S7 (corpus files) |
+| VISUALSTYLEs of an older layout replaced by AutoCAD's standard values for their names (2dWireframe's for a custom name) | S13 |
 | Insert lists, class counts, object order kept as read; R2000 VP_ENT_HDR table dropped | not visible as such (S9): checks 2-4 on the corpus files |
 | Re-encoding with canonical (shortest) forms where AutoCAD used others (pattern (c), 2% tolerance) | checks 2-4 on the corpus files |
 | Near-linear writing of large drawings | S8 |
