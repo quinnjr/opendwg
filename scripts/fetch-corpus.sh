@@ -1,14 +1,17 @@
 #!/bin/sh
-# Download the public sample corpus listed in corpus/manifest.toml into corpus/files/.
-# Idempotent: files whose SHA-256 already matches are skipped. Exits non-zero on any failure.
+# Download the public sample corpus listed in corpus/manifest.toml and corpus/extended.toml into
+# corpus/files/. Idempotent: files whose SHA-256 already matches are skipped. Exits non-zero on any
+# failure. Git LFS media URLs (media.githubusercontent.com) are plain HTTPS downloads.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
-manifest="$root/corpus/manifest.toml"
 dest="$root/corpus/files"
 mkdir -p "$dest"
 
-# name<TAB>url<TAB>sha256 per [[file]] entry.
-entries=$(awk '
+# name<TAB>url<TAB>sha256 per [[file]] entry of both manifests.
+entries=""
+for manifest in "$root/corpus/manifest.toml" "$root/corpus/extended.toml"; do
+  [ -f "$manifest" ] || { echo "missing $manifest" >&2; exit 1; }
+  found=$(awk '
   function val(s) { sub(/^[^=]*= *"/, "", s); sub(/".*$/, "", s); return s }
   function flush() { if (name != "") print name "\t" url "\t" sha; name = ""; url = ""; sha = "" }
   /^\[\[file\]\]/ { flush(); next }
@@ -17,8 +20,10 @@ entries=$(awk '
   /^sha256 *=/ { sha = val($0) }
   END { flush() }
 ' "$manifest")
-
-[ -n "$entries" ] || { echo "no entries found in $manifest" >&2; exit 1; }
+  [ -n "$found" ] || { echo "no entries found in $manifest" >&2; exit 1; }
+  entries="$entries${entries:+
+}$found"
+done
 
 fail=0
 tmp=""

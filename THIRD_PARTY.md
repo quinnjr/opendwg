@@ -256,6 +256,36 @@ pinned to commit `ed5ff1cf4731c0296bb8931a387bd9d7c634122f`. They are downloaded
 `scripts/fetch-corpus.sh` and are never committed or distributed with this crate. ACadSharp is
 Copyright (c) 2021 Albert Domenech, MIT licence (`LICENSE` at the repository root).
 
+## Extended sample corpus (`corpus/extended.toml`)
+Downloaded on demand by `scripts/fetch-corpus.sh`, pinned by commit (or, for US federal files, by
+SHA-256), never committed or distributed with this crate. Each entry's `license_note` names its
+licence; the sources:
+- mzjensen/Camber (BSD-3-Clause, Copyright (c) 2022 Zachri Jensen): Civil 3D 2023 test drawings.
+- paoloemilioserra/Civil3dToolkit (Apache-2.0): a Civil 3D 2020 drawing.
+- Railcomplete-AS/RailCOMPLETE-DNA-NO-BN (MIT, Copyright (c) 2015-2024 Railcomplete AS): AutoCAD
+  and Civil 3D drawings (Git LFS).
+- getcadcraft/civilcraft (Apache-2.0): ODA SDK and civilcraft-written fixtures.
+- Bricsys/rhino.inside-bricscad (MIT, Copyright (c) 2019 Bricsys NV): BricsCAD samples.
+- mozman/ezdxf (MIT, Copyright (c) 2020 Manfred Moitzi): documentation drawings.
+- OSGeo/gdal (MIT, "GDAL/OGR General" section of LICENSE.TXT): OGR CAD driver test data.
+- aspose-cad/Aspose.CAD-for-.NET and Aspose.CAD-for-Java (MIT, Copyright (c) Aspose Pty Ltd):
+  example drawings.
+- FsDiG/Fs.Fox.CAD (MIT, Copyright (c) 2021 InspireFunction), fyjgtddco/DSH-SW-and-CAD (MIT,
+  Copyright (c) 2025), WuwuZhang0019/CADTools (Apache-2.0): GBK drawings.
+- ADN-DevTech/objectarx_sdks (MIT, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN): ObjectARX
+  SDK sample drawings.
+- Autodesk-Forge/design.automation-asp.net-cabinet-sample and design.automation-python-tutorial
+  (MIT, Copyright (c) 2016/2017 Autodesk, Inc.), autodesk-platform-services/
+  aps-design-automation-dotnet and autocad-da-acc-model-viewer (MIT, Copyright (c) 2018 Autodesk
+  Platform Services / 2024 Madhukar Moogala): Autodesk sample drawings.
+- chuongmep/CadPythonShell and chuongmep/OpenMEP (MIT), KubaSzostak/Geo7 (MIT, Copyright (c) 2015
+  Kuba Szostak), qinchuan1122/cad-dwg-reader (MIT), backkem/codecad (MIT, Copyright (c) 2025
+  CodeCAD contributors), burubur/burubur.github.io (0BSD).
+- DomCR/ACadSharp at commit `29137f3adaf75ddebd532179eda1e811525ca574` (MIT, Copyright (c) 2021
+  Albert Domenech): newer samples (dynamic blocks, geolocation, sample_base, svg, AC1014).
+- USDA Forest Service Engineering AutoCAD Drawing Library: US federal works, public domain
+  (17 USC 105).
+
 ## ACadSharp licence
 The licence of ACadSharp, which covers the test fixtures above (`src/object/testdata/*.bin` and
 `src/section/testdata/header_ac10xx.bin`, not published with the crate), as in
