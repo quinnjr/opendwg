@@ -900,8 +900,14 @@ fn is_modeled(key: TypeKey, entity: bool) -> bool {
 /// up share the stream layout).
 fn raw_is_convertible(r: &RawObject, entity: bool) -> bool {
     let name = r.class_name.as_deref();
-    let since = name.and_then(modeled_since);
-    if is_modeled(raw_type_key(r), entity) && since.is_none_or(|v| r.source_version >= v) {
+    // A type the library models has a known R2018 layout: raw bits of it
+    // from a version before that layout (read before the type is modeled,
+    // or a typed decode that failed) would be read as R2018's and misread.
+    // An R2007 VISUALSTYLE written by AutoCAD 2008 or the ODA SDK
+    // (`adsk-cab-04`, `arx-12`, `cc-16` of the extended corpus) fails to
+    // decode as R2018's; one AutoCAD marks as saved in its older layout is
+    // copied (see `Object::is_convertible`).
+    if is_modeled(raw_type_key(r), entity) {
         let stable = name
             .and_then(layout_stable_since)
             .unwrap_or(ObjWriter::VERSION);
@@ -945,8 +951,8 @@ pub(crate) fn saved_by_object_version(common: &ObjectCommon) -> bool {
 /// layout before is not known): MATERIAL and the section and detail view
 /// styles from R2007 (the corpus's oldest), VISUALSTYLE from R2013 (R2010
 /// stores fewer properties). Raw objects of these types from earlier
-/// versions are copied as raw objects of an unmodeled type are (see
-/// [`raw_is_convertible`]).
+/// versions are kept raw, and written only from a version whose layout is
+/// R2018's (see [`raw_is_convertible`]).
 fn modeled_since(name: &str) -> Option<Version> {
     Some(match name {
         "MATERIAL" => Version::R2007,

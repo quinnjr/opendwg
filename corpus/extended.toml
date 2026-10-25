@@ -440,6 +440,9 @@ features = ["custom_objects"]
 producer = "ODA SDK 27.9"
 license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
 
+[file.expect]
+unconvertible = true
+
 [[file]]
 name = "cc-17"
 url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/vp-overrides/vp-overrides-2010.dwg"
@@ -448,6 +451,9 @@ version = "AC1024"
 features = ["custom_objects"]
 producer = "ODA SDK 27.9"
 license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
 
 [[file]]
 name = "cc-18"
@@ -500,6 +506,9 @@ features = ["custom_objects","hatch"]
 producer = "ODA SDK 27.9"
 license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
 
+[file.expect]
+unconvertible = true
+
 [[file]]
 name = "cc-23"
 url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/xclip/xclip-2010.dwg"
@@ -508,6 +517,9 @@ version = "AC1024"
 features = ["custom_objects","hatch"]
 producer = "ODA SDK 27.9"
 license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
 
 [[file]]
 name = "cc-24"
@@ -932,6 +944,9 @@ features = ["custom_objects","mtext"]
 producer = "AutoCAD (ObjectARX SDK sample)"
 license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
+[file.expect]
+unconvertible = true
+
 [[file]]
 name = "arx-13"
 url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2009/samples/graphics/AsdkTransientGraphicsSampFolder/DWGMap.dwg"
@@ -941,6 +956,9 @@ features = ["attributes","custom_objects","image","proxy_graphics"]
 producer = "AutoCAD (ObjectARX SDK sample)"
 license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
 
+[file.expect]
+unconvertible = true
+
 [[file]]
 name = "arx-15"
 url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2012/classmap/classmap.dwg"
@@ -949,6 +967,9 @@ version = "AC1024"
 features = ["custom_objects","mtext"]
 producer = "AutoCAD (ObjectARX SDK sample)"
 license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[file.expect]
+unconvertible = true
 
 [[file]]
 name = "adsk-cab-01"
@@ -985,6 +1006,9 @@ version = "AC1021"
 features = ["attributes","custom_objects","dimension","hatch","mtext","proxy_graphics"]
 producer = "AutoCAD 2008 (registry 17.1)"
 license_note = "MIT (Autodesk-Forge/design.automation-asp.net-cabinet-sample, Copyright (c) 2016 Autodesk, Inc.); the LICENSE at the repository root, commit bbc3f46cdb63"
+
+[file.expect]
+unconvertible = true
 
 [[file]]
 name = "adsk-py-01"
