@@ -15,19 +15,22 @@
 //!   fields ODS does not describe: a `B` (DXF 290), the entity's GUID (DXF
 //!   2: `BL`, `BS`, `BS`, 8 `RC`) and a 0 read as a `BS`, checked against
 //!   the DXF export.
-//! - From R2007 a REGION stores no history handle (ODS: all ACIS entities);
-//!   3DSOLID does, as ACadSharp `readSolid3D` reads it. BODY (not in the
-//!   corpus) is taken to store one, as ODS says.
+//! - From R2007 only a 3DSOLID stores a history handle (ODS: all ACIS
+//!   entities), as ACadSharp `readSolid3D` reads it. A REGION stores none
+//!   (AutoCAD's files), nor does a BODY: the ODA SDK's R2018 BODY (`cc-11`
+//!   of the extended corpus) ends its handle stream before one, while its
+//!   3DSOLID stores one. No AutoCAD R2007+ BODY is in the corpus.
 //! - A VIEWPORT's clip boundary is a hard pointer (ODS: soft), as every
 //!   corpus viewport stores it and ACadSharp `writeViewport` writes it.
 //! - A WIPEOUT, which ODS does not describe, is laid out as an IMAGE, as
 //!   ACadSharp `readCadImage` reads both.
 //!
-//! Unconfirmed by the corpus, which has none: BODY, OLE2FRAME,
-//! ACAD_PROXY_ENTITY, ACIS silhouettes and an image clip type other than 1.
-//! They follow ODS.
+//! Unconfirmed by the corpus, which has none: OLE2FRAME, ACAD_PROXY_ENTITY,
+//! ACIS silhouettes and an image clip type other than 1. They follow ODS.
+//! BODY is in the extended corpus only as the ODA SDK writes it (`cc-11`,
+//! R2018, and `cc-10`, R2000): no AutoCAD-written BODY confirms its layout.
 
-use super::super::raw::{take_bits, take_rest};
+use super::super::raw::{HandleTail, take_bits, take_rest, trailing_refs};
 use super::super::stream::{ObjReader, ObjWriter};
 use super::super::tables::{HARD_OWNER, HARD_POINTER, SOFT_POINTER, put};
 use super::dim::{MIN_3BD, check_handles, corrupt, count, read_count, write_count};
@@ -452,6 +455,12 @@ impl AcisKind {
             AcisKind::Body => type_code::BODY,
         }
     }
+
+    /// Whether the entity stores a history handle from R2007: a 3DSOLID
+    /// only (see the module documentation).
+    pub(crate) fn has_history(self) -> bool {
+        self == AcisKind::Solid3d
+    }
 }
 
 /// A GUID as an R2013+ ACIS entity stores it: `BL` data 1, `BS` data 2
@@ -590,8 +599,8 @@ pub struct AcisEntity {
     pub wireframe_bits: u64,
     /// R2007+ unknown `BL`; 0 before.
     pub unknown: i32,
-    /// R2007+ history (hard owner, DXF 350), stored by 3DSOLIDs and BODYs
-    /// (not REGIONs); `None` before R2007 and for REGIONs.
+    /// R2007+ history (hard owner, DXF 350), stored by 3DSOLIDs only;
+    /// `None` before R2007 and for REGIONs and BODYs.
     pub history: Option<Handle>,
 }
 
@@ -631,16 +640,15 @@ fn is_sab(data: &[u8]) -> bool {
     data.starts_with(b"ACIS BinaryFile") || data.starts_with(b"ASM BinaryFile")
 }
 
-/// The end of the first end-of-data marker in `data`.
+/// The end of the first end-of-data marker in `data` (the earliest end of
+/// any marker), in one pass: at each end position, whether a marker ends
+/// there.
 fn acis_end(data: &[u8]) -> Option<usize> {
-    ACIS_END_MARKERS
-        .iter()
-        .filter_map(|m| {
-            data.windows(m.len())
-                .position(|w| w == *m)
-                .map(|at| at + m.len())
-        })
-        .min()
+    (1..=data.len()).find(|&end| {
+        ACIS_END_MARKERS
+            .iter()
+            .any(|m| end >= m.len() && data[end - m.len()..end] == **m)
+    })
 }
 
 fn skip_3bd(d: &mut BitReader, n: usize) -> Result<()> {
@@ -745,13 +753,11 @@ impl AcisEntity {
                 // No length is stored: the data runs to its end marker.
                 let start = d.bit_pos();
                 let mut rest = d.clone();
-                let all = rest.read_bytes((rest.remaining_bits() / 8) as usize)?;
-                let end = acis_end(&all).ok_or_else(|| corrupt("no end of ACIS data"))?;
+                let mut data = rest.read_bytes((rest.remaining_bits() / 8) as usize)?;
+                let end = acis_end(&data).ok_or_else(|| corrupt("no end of ACIS data"))?;
                 d.seek_bit(start + 8 * end as u64)?;
-                AcisPayload::Inline {
-                    unknown,
-                    data: all[..end].to_vec(),
-                }
+                data.truncate(end);
+                AcisPayload::Inline { unknown, data }
             }
             v => return Err(corrupt(format!("unknown ACIS data version {v}"))),
         })
@@ -797,7 +803,7 @@ impl AcisEntity {
                 unknown: d.read_bs()?,
             }
         };
-        let history = if v >= Version::R2007 && kind != AcisKind::Region {
+        let history = if v >= Version::R2007 && kind.has_history() {
             Some(r.href_abs()?)
         } else {
             None
@@ -830,8 +836,8 @@ impl AcisEntity {
     ///
     /// The R2013+ fields are set as on every corpus entity: DXF 290 set and
     /// a trailing 0 (an entity without data gets the same; the corpus has
-    /// none to compare). A 3DSOLID or BODY read before R2007 has no
-    /// history, and gets a null one.
+    /// none to compare). A 3DSOLID read before R2007 has no history, and
+    /// gets a null one.
     pub fn to_r2013(&self, guid: AcisGuid) -> Option<(AcisEntity, Option<Vec<u8>>)> {
         let data = match &self.payload {
             AcisPayload::DataStorage { .. } => return Some((self.clone(), None)),
@@ -839,10 +845,10 @@ impl AcisEntity {
             AcisPayload::Inline { data, .. } if is_sab(data) => Some(data.clone()),
             AcisPayload::Inline { .. } | AcisPayload::SatBlocks { .. } => return None,
         };
-        let history = match self.kind {
-            AcisKind::Region => None,
-            AcisKind::Solid3d | AcisKind::Body => Some(self.history.unwrap_or_default()),
-        };
+        let history = self
+            .kind
+            .has_history()
+            .then(|| self.history.unwrap_or_default());
         let entity = AcisEntity {
             payload: AcisPayload::DataStorage {
                 flag_290: true,
@@ -867,7 +873,7 @@ impl AcisEntity {
                  writer, which moves its data to AcDs and gives it a GUID",
             ));
         };
-        let has_history = self.kind != AcisKind::Region;
+        let has_history = self.kind.has_history();
         if self.history.is_some() != has_history {
             return Err(encode_err(format!(
                 "a {:?} needs {} history handle",
@@ -966,6 +972,10 @@ pub struct ProxyEntity {
     /// The object ids: every reference left in the handle stream, kept as
     /// stored.
     pub object_ids: Vec<HandleRef>,
+    /// Handle stream bits after the last reference that do not parse as
+    /// one, kept as stored (see [`crate::object::HandleTail`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub handle_tail: HandleTail,
 }
 
 impl ProxyEntity {
@@ -984,10 +994,7 @@ impl ProxyEntity {
             Some(s) => Some(take_rest(s)?).filter(|(_, bits)| *bits > 0),
             None => None,
         };
-        let mut object_ids = Vec::new();
-        while r.handles.remaining_bits() >= 8 {
-            object_ids.push(r.href()?);
-        }
+        let (object_ids, handle_tail) = trailing_refs(r)?;
         Ok(ProxyEntity {
             class_id,
             version,
@@ -997,6 +1004,7 @@ impl ProxyEntity {
             data_bits,
             strings,
             object_ids,
+            handle_tail,
         })
     }
 
@@ -1012,7 +1020,7 @@ impl ProxyEntity {
         for &h in &self.object_ids {
             w.href(h)?;
         }
-        Ok(())
+        self.handle_tail.write(w)
     }
 }
 
@@ -1023,6 +1031,37 @@ pub(crate) mod tests {
     use crate::bits::BitWriter;
     use crate::error::Error;
     use crate::object::stream::tests::assemble;
+
+    /// The one-pass marker search finds the earliest end, as searching for
+    /// each marker and taking the first end does.
+    #[test]
+    fn acis_end_is_the_earliest_marker_end() {
+        let each = |data: &[u8]| {
+            ACIS_END_MARKERS
+                .iter()
+                .filter_map(|m| {
+                    data.windows(m.len())
+                        .position(|w| w == *m)
+                        .map(|at| at + m.len())
+                })
+                .min()
+        };
+        let sab_acis = ACIS_END_MARKERS[2];
+        let sab_asm = ACIS_END_MARKERS[3];
+        let cases: Vec<Vec<u8>> = vec![
+            b"".to_vec(),
+            b"no marker".to_vec(),
+            b"x End-of-ACIS-data y".to_vec(),
+            b"End-of-ASM-dataEnd-of-ACIS-data".to_vec(),
+            b"End-of-ACIS-dataEnd-of-ASM-data".to_vec(),
+            [b"head".as_slice(), sab_asm, sab_acis].concat(),
+            [b"head".as_slice(), sab_acis, b"tail"].concat(),
+            b"End-of-ACIS-dat".to_vec(),
+        ];
+        for c in cases {
+            assert_eq!(acis_end(&c), each(&c), "{c:?}");
+        }
+    }
 
     pub(crate) fn viewport() -> Viewport {
         Viewport {
@@ -1171,6 +1210,7 @@ pub(crate) mod tests {
                     value: 0x1234,
                 },
             ],
+            handle_tail: HandleTail::default(),
         }
     }
 
@@ -1431,7 +1471,7 @@ pub(crate) mod tests {
     }
 
     /// An R2004 entity with the "ACIS empty" bit set carries no data; it
-    /// converts with the R2013 fields set, a BODY getting a null history.
+    /// converts with the R2013 fields set, a BODY with no history.
     #[test]
     fn empty_acis_converts() {
         let mut d = BitWriter::new();
@@ -1452,7 +1492,7 @@ pub(crate) mod tests {
         let guid = AcisGuid::derived("{fp}", Handle(0x80));
         let (y, data) = x.to_r2013(guid).unwrap();
         assert_eq!(data, None);
-        assert_eq!(y.history, Some(Handle(0)));
+        assert_eq!(y.history, None);
         assert!(matches!(y.payload, AcisPayload::DataStorage { guid: g, .. } if g == guid));
         let decode = |r: &mut ObjReader| AcisEntity::decode(r, AcisKind::Body);
         roundtrip(&y, AcisEntity::encode, decode, type_code::BODY);
@@ -1478,7 +1518,7 @@ pub(crate) mod tests {
         assert_eq!(g.to_string().len(), 38);
     }
 
-    /// R2007+ REGIONs store no history; 3DSOLIDs and BODYs one. A history
+    /// R2007+ REGIONs and BODYs store no history; 3DSOLIDs one. A history
     /// that disagrees with the kind is refused on write, and a reference
     /// left after a REGION is not read (so the entity stays raw).
     #[test]
@@ -1488,8 +1528,10 @@ pub(crate) mod tests {
         assert!(region.encode(&mut ObjWriter::new(Handle(0x80))).is_err());
         let mut body = acis();
         body.kind = AcisKind::Body;
-        body.history = None;
         assert!(body.encode(&mut ObjWriter::new(Handle(0x80))).is_err());
+        let mut solid = acis();
+        solid.history = None;
+        assert!(solid.encode(&mut ObjWriter::new(Handle(0x80))).is_err());
         // A solid's bytes read as a region leave the history unread.
         let mut w = ObjWriter::new(Handle(0x80));
         acis().encode(&mut w).unwrap();
@@ -1647,7 +1689,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// A proxy whose references run past the handle stream fails cleanly.
+    /// A proxy cut short fails cleanly; one whose last reference runs past
+    /// the handle stream keeps its bits.
     #[test]
     fn proxy_truncated() {
         let p = proxy();
@@ -1663,14 +1706,14 @@ pub(crate) mod tests {
         let mut r = reader(&bytes);
         r.data.limit_remaining(3);
         assert!(ProxyEntity::decode(&mut r).is_err());
-        // A reference cut in half.
+        // A reference cut in half ends the list; its bits are kept.
         let mut r = reader(&bytes);
         let n = r.handles.remaining_bits();
         r.handles.limit_remaining(n - 12);
-        assert!(matches!(
-            ProxyEntity::decode(&mut r),
-            Err(Error::Truncated { .. })
-        ));
+        let back = ProxyEntity::decode(&mut r).unwrap();
+        assert_eq!(back.object_ids, p.object_ids[..p.object_ids.len() - 1]);
+        assert!(back.handle_tail.bits >= 8, "{:?}", back.handle_tail);
+        assert_eq!(r.handles.remaining_bits(), 0);
     }
 
     /// The OLE data length is checked against the data left.

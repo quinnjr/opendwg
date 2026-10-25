@@ -827,7 +827,11 @@ impl MultiLeader {
     }
 
     /// Whether the multileader can be written as R2018: R2018 has no place
-    /// for the arrowheads stored up to R2007.
+    /// for the arrowheads stored up to R2007. The refusal stands because no
+    /// mapping of that list onto R2010+'s per-leader-line arrowheads is
+    /// confirmed (neither ODS nor the corpus pairs a list with the lines
+    /// AutoCAD gives the arrowheads to), and guessing one could change what
+    /// AutoCAD draws.
     pub fn is_convertible(&self) -> bool {
         self.arrowheads.is_empty()
     }

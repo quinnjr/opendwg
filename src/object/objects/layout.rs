@@ -220,7 +220,7 @@ pub struct Layout {
     /// include viewports owned elsewhere; kept as read. R2000 files store
     /// none; the drawing fills it from the layout's block on read. Adding or
     /// removing a VIEWPORT does not update it here: the drawing refreshes
-    /// it at save (Task 22, from `drawing::block_viewports`).
+    /// it at save (from `drawing::block_viewports`).
     pub viewports: Vec<Handle>,
 }
 

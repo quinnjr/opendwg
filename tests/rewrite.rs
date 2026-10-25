@@ -1,4 +1,4 @@
-//! Task 25: rewriting a whole drawing's handles. Every corpus file that saves
+//! Rewriting a whole drawing's handles. Every corpus file that saves
 //! as read is renumbered by +0x1000, saved and read back: the copy validates
 //! without errors, and renumbered back by -0x1000 it has the model of the
 //! file saved without renumbering.

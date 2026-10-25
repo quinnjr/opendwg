@@ -7,6 +7,28 @@
 //! from 500 up by the DXF name of their class. Typed decoders ([`tables`],
 //! [`entities`], ...) are added per type; every other object decodes to
 //! `Unknown`.
+//!
+//! # Non-canonical round trips
+//!
+//! An R2018 object encoded again after [`decode_object`] decodes to the same
+//! value, and is the same bytes except where the source stored something in
+//! a form the encoder does not produce:
+//!
+//! - text whose stored length counts a trailing NUL (some writers, such as
+//!   ACadSharp, count a terminator): the NULs are dropped on read (see
+//!   [`ObjReader::text`]; extended data strings likewise), so the text is
+//!   written shorter;
+//! - an R2004+ object whose "no extension dictionary" flag is clear but
+//!   whose extension dictionary handle is null: read as no extension
+//!   dictionary, written with the flag set and no handle;
+//! - values stored in a longer form than needed (a `BS` 0 stored in full,
+//!   as AutoCAD 2025 writes some dimension fields): written in the
+//!   shortest form;
+//! - the end padding of a typed object's handle stream (fewer than 8 bits):
+//!   written as one bits, as AutoCAD pads. Raw objects keep theirs.
+//!
+//! The corpus tests allow such objects (at most one in fifty of a type per
+//! file) and check that they decode equal.
 
 pub mod common;
 pub mod entities;
@@ -55,7 +77,7 @@ pub use objects::{
     SpatialIndex, TableStyle, VISUAL_STYLE_KINDS, VisualStyle, VisualStyleValue, WipeoutVariables,
     XRecord, XRecordValue, group_code_type,
 };
-pub use raw::{RawObject, UnreadableObject};
+pub use raw::{HandleTail, RawObject, UnreadableObject};
 pub use stream::{ObjReader, ObjWriter, ObjectPreamble};
 pub use tables::{
     AppId, BlockRecord, DimStyle, EntityList, Layer, Linetype, TableControl, TableEntry, TableKind,
@@ -498,11 +520,15 @@ impl NonGraphical {
 
     /// Whether the object can be written as R2018. Raw bits from R2000 and
     /// R2004 cannot, nor raw bits of a modeled type from before R2018 (see
-    /// [`raw_is_convertible`]); neither can an R2000 block record whose entity list has
-    /// not been built (see [`EntityList`]), a table entry whose xref
-    /// index R2018 cannot store (see [`TableEntry`]), a pre-R2010 table
-    /// style, a multiline style with a linetype index, or spatial index bits
-    /// read before R2007.
+    /// [`raw_is_convertible`]); neither can an object whose common data
+    /// could not be read ([`NonGraphical::Unreadable`]), an R2000 block
+    /// record whose entity list has not been built (see [`EntityList`]), a
+    /// table entry whose xref index R2018 cannot store (see [`TableEntry`]),
+    /// a pre-R2010 table style with a suppressed title or header row (see
+    /// [`TableStyle::is_convertible`]), a multiline style with
+    /// a linetype index, spatial index bits read before R2007, or an XRECORD
+    /// read before R2007 that keeps the bytes of an unknown item (see
+    /// [`XRecord::is_convertible`]).
     fn is_convertible(&self) -> bool {
         if self.table_entry().is_some_and(|e| !e.is_convertible()) {
             return false;
@@ -671,11 +697,14 @@ impl Entity {
 
     /// Whether the entity can be written as R2018. Raw bits from R2000 and
     /// R2004 cannot, nor raw bits of a modeled type from before R2018 (see
-    /// [`raw_is_convertible`]); neither can an R2000 insert or polyline whose attribute
-    /// or vertex list has not been built (see [`EntityList`]), nor an R2000
-    /// ACIS entity's SAT (see [`AcisEntity`]; other ACIS entities read
-    /// before R2013 are converted by the drawing writer, and fail to encode
-    /// alone).
+    /// [`raw_is_convertible`]); neither can an R2000 insert or polyline
+    /// whose attribute or vertex list has not been built (see
+    /// [`EntityList`]), a multileader with the arrowhead list stored up to
+    /// R2007 (see [`MultiLeader::is_convertible`]), nor an ACIS entity whose
+    /// data is SAT text, read before R2013 from any version (version 1 SAT
+    /// blocks, or inline data that is not SAB; see [`AcisEntity`]). Other
+    /// ACIS entities read before R2013 are converted by the drawing writer,
+    /// and fail to encode alone.
     fn is_convertible(&self) -> bool {
         if let Some(list) = self.polyline_vertices() {
             return matches!(list, EntityList::Owned(_));
@@ -871,8 +900,14 @@ fn is_modeled(key: TypeKey, entity: bool) -> bool {
 /// up share the stream layout).
 fn raw_is_convertible(r: &RawObject, entity: bool) -> bool {
     let name = r.class_name.as_deref();
-    let since = name.and_then(modeled_since);
-    if is_modeled(raw_type_key(r), entity) && since.is_none_or(|v| r.source_version >= v) {
+    // A type the library models has a known R2018 layout: raw bits of it
+    // from a version before that layout (read before the type is modeled,
+    // or a typed decode that failed) would be read as R2018's and misread.
+    // An R2007 VISUALSTYLE written by AutoCAD 2008 or the ODA SDK
+    // (`adsk-cab-04`, `arx-12`, `cc-16` of the extended corpus) fails to
+    // decode as R2018's; one AutoCAD marks as saved in its older layout is
+    // copied (see `Object::is_convertible`).
+    if is_modeled(raw_type_key(r), entity) {
         let stable = name
             .and_then(layout_stable_since)
             .unwrap_or(ObjWriter::VERSION);
@@ -916,8 +951,8 @@ pub(crate) fn saved_by_object_version(common: &ObjectCommon) -> bool {
 /// layout before is not known): MATERIAL and the section and detail view
 /// styles from R2007 (the corpus's oldest), VISUALSTYLE from R2013 (R2010
 /// stores fewer properties). Raw objects of these types from earlier
-/// versions are copied as raw objects of an unmodeled type are (see
-/// [`raw_is_convertible`]).
+/// versions are kept raw, and written only from a version whose layout is
+/// R2018's (see [`raw_is_convertible`]).
 fn modeled_since(name: &str) -> Option<Version> {
     Some(match name {
         "MATERIAL" => Version::R2007,
@@ -1032,7 +1067,9 @@ enum TypeKey<'a> {
     Class(&'a str),
 }
 
-/// The typed entity decoders; `None` keeps the entity raw.
+/// The typed entity decoders; `None` keeps the entity raw. Fixed types
+/// older files may store as class types (HATCH, OLE2FRAME,
+/// ACAD_PROXY_ENTITY, LWPOLYLINE) are decoded by either key.
 fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
     use type_code::*;
     let dim =
@@ -1043,6 +1080,8 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
         |r: &mut ObjReader| Ole2Frame::decode(r).map(|o| Entity::Ole2Frame(Box::new(o)));
     let proxy =
         |r: &mut ObjReader| ProxyEntity::decode(r).map(|p| Entity::ProxyEntity(Box::new(p)));
+    let lwpolyline =
+        |r: &mut ObjReader| LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)));
     let code = match key {
         TypeKey::Fixed(code) => code,
         TypeKey::Class(name) => {
@@ -1055,6 +1094,7 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
                 "HATCH" => hatch(r),
                 "OLE2FRAME" => ole2frame(r),
                 "ACAD_PROXY_ENTITY" => proxy(r),
+                "LWPOLYLINE" => lwpolyline(r),
                 _ => return None,
             });
         }
@@ -1080,7 +1120,7 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
         ATTRIB => Attrib::decode(r).map(|a| Entity::Attrib(Box::new(a))),
         ATTDEF => AttDef::decode(r).map(|a| Entity::AttDef(Box::new(a))),
         MTEXT => MText::decode(r).map(|m| Entity::MText(Box::new(m))),
-        LWPOLYLINE => LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p))),
+        LWPOLYLINE => lwpolyline(r),
         POLYLINE_2D => Polyline2d::decode(r).map(Entity::Polyline2d),
         POLYLINE_3D => Polyline3d::decode(r).map(Entity::Polyline3d),
         POLYLINE_PFACE => PolyfaceMesh::decode(r).map(Entity::PolyfaceMesh),
@@ -1112,9 +1152,11 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
     })
 }
 
-/// The typed non-graphical decoders; `None` keeps the object raw. Types
-/// that are fixed in R2018 but class types in older files (LAYOUT and
-/// ACDBPLACEHOLDER in R2000) are decoded by either key.
+/// The typed non-graphical decoders; `None` keeps the object raw. The fixed
+/// types also decoded by class name, as older files may store them (LAYOUT
+/// and ACDBPLACEHOLDER are class types in R2000), are DICTIONARY, XRECORD,
+/// LAYOUT, GROUP, MLINESTYLE, ACDBPLACEHOLDER and ACAD_PROXY_OBJECT; the
+/// other names below are class types only.
 fn typed_object(key: TypeKey, r: &mut ObjReader) -> Option<Result<NonGraphical>> {
     use type_code::*;
     let code = match key {
@@ -1574,6 +1616,129 @@ mod tests {
             raw.tail_handle_bits
         );
         assert_eq!(encode_object(&obj, &[]).unwrap(), bytes);
+    }
+
+    /// The fixed entity types older files may store as class types decode
+    /// by class name as by number: HATCH, OLE2FRAME, ACAD_PROXY_ENTITY and
+    /// LWPOLYLINE.
+    #[test]
+    fn fixed_entities_decode_by_class_name() {
+        let encoded = |e: &Entity| {
+            let mut w = ObjWriter::new(Handle(0x80));
+            e.encode(&mut w).unwrap();
+            w.finish(0).unwrap()
+        };
+        let cases = [
+            (
+                "LWPOLYLINE",
+                Entity::LwPolyline(Box::new(entities::poly::tests::lwpolyline())),
+            ),
+            (
+                "HATCH",
+                Entity::Hatch(Box::new(entities::hatch::tests::hatch())),
+            ),
+            (
+                "ACAD_PROXY_ENTITY",
+                Entity::ProxyEntity(Box::new(entities::misc::tests::proxy())),
+            ),
+        ];
+        for (name, e) in cases {
+            let bytes = encoded(&e);
+            let mut r = entities::tests::reader(&bytes);
+            let got = typed_entity(TypeKey::Class(name), &mut r).map(|x| x.unwrap());
+            assert_eq!(got.as_ref(), Some(&e), "{name}");
+        }
+    }
+
+    /// A reference after the last one that does not parse (its counter runs
+    /// past the stream's end) no longer fails the typed decode of the
+    /// objects that read references to the end (XRECORD, SPATIAL_FILTER,
+    /// SPATIAL_INDEX, ACAD_PROXY_ENTITY): its bits are kept, and the object
+    /// is written back as read.
+    #[test]
+    fn unparsable_trailing_references_are_kept() {
+        let tail = HandleTail {
+            // Code 4 with a 15-byte counter, then one byte.
+            bytes: vec![0x4F, 0xAA],
+            bits: 16,
+        };
+        let ids = vec![HandleRef {
+            code: 5,
+            value: 0x99,
+        }];
+        let classes = [
+            class(500, "SPATIAL_FILTER", false),
+            class(501, "SPATIAL_INDEX", false),
+        ];
+        let other = |object| Object::Other {
+            common: object_common(0x80),
+            object,
+        };
+        let mut entity_common = EntityCommon::new(Handle(0x10));
+        entity_common.obj = object_common(0x80);
+        let objects = [
+            other(NonGraphical::XRecord(XRecord {
+                object_ids: ids.clone(),
+                handle_tail: tail.clone(),
+                ..XRecord::default()
+            })),
+            other(NonGraphical::SpatialFilter(SpatialFilter {
+                handles: ids.clone(),
+                handle_tail: tail.clone(),
+                ..SpatialFilter::default()
+            })),
+            other(NonGraphical::SpatialIndex(Box::new(SpatialIndex {
+                timestamps: [1, 2],
+                bits: OpaqueBits::default(),
+                handles: ids.clone(),
+                handle_tail: tail.clone(),
+                source_version: Version::R2018,
+            }))),
+            Object::Entity {
+                common: entity_common,
+                entity: Entity::ProxyEntity(Box::new(ProxyEntity {
+                    object_ids: ids.clone(),
+                    handle_tail: tail.clone(),
+                    ..entities::misc::tests::proxy()
+                })),
+            },
+        ];
+        for obj in objects {
+            let name = obj.type_name().into_owned();
+            let bytes = encode_object(&obj, &classes).unwrap();
+            let mut c = ctx(&classes);
+            let back = decode_object(&bytes, Handle(0x80), &mut c).unwrap();
+            assert!(c.diagnostics.is_empty(), "{name}: {:?}", c.diagnostics);
+            assert!(back.raw().is_none(), "{name}: typed");
+            // The kept bits are the tail and the end padding after it.
+            let kept = match &back {
+                Object::Other {
+                    object: NonGraphical::XRecord(x),
+                    ..
+                } => &x.handle_tail,
+                Object::Other {
+                    object: NonGraphical::SpatialFilter(f),
+                    ..
+                } => &f.handle_tail,
+                Object::Other {
+                    object: NonGraphical::SpatialIndex(i),
+                    ..
+                } => &i.handle_tail,
+                Object::Entity {
+                    entity: Entity::ProxyEntity(p),
+                    ..
+                } => &p.handle_tail,
+                _ => unreachable!(),
+            };
+            assert!(
+                kept.bits >= 16 && kept.bytes.starts_with(&tail.bytes),
+                "{name}"
+            );
+            let again = encode_object(&back, &classes).unwrap();
+            assert_eq!(again, bytes, "{name}: written back as read");
+            let mut c = ctx(&classes);
+            assert_eq!(decode_object(&again, Handle(0x80), &mut c).unwrap(), back);
+        }
     }
 
     /// A class table whose numbers are not positional (reversed and sparse

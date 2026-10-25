@@ -1,4 +1,4 @@
-//! Task 23: `Drawing::validate`, the structural check run before every save.
+//! `Drawing::validate`, the structural check run before every save.
 //! Error findings stop `to_bytes`; warnings do not.
 
 mod common;
@@ -99,7 +99,7 @@ fn corpus_files_validate_clean() {
     }
 }
 
-/// Review Focus 3: an entity whose layer is changed through `get_mut` to a
+/// An entity whose layer is changed through `get_mut` to a
 /// handle no object has is an error naming the entity; saving is refused.
 #[test]
 fn validate_catches_dangling_layer() {
@@ -127,7 +127,7 @@ fn validate_catches_dangling_layer() {
     );
 }
 
-/// Review Focus 4: soft pointers and reactors to objects that do not exist
+/// Soft pointers and reactors to objects that do not exist
 /// are warnings; the drawing saves and keeps their values.
 #[test]
 fn soft_dangling_is_warning() {
@@ -687,4 +687,89 @@ fn class_kind_must_match_its_objects() {
         .collect::<Vec<_>>();
     assert!(found.iter().any(|m| m.contains("class")), "{found:?}");
     assert!(matches!(d.to_bytes_at(SAVED), Err(Error::Invalid(_))));
+}
+
+/// An entity one block lists but whose owner names another block is
+/// written with the listing block as owner, with a warning; listed by two
+/// blocks it is refused.
+#[test]
+fn entity_owner_follows_its_block_list() {
+    use opendwg::object::{Entity, EntityCommon, Line};
+    let mut d = Drawing::new();
+    let ms = d.model_space();
+    let l0 = d.layer_by_name("0").unwrap();
+    let line = d
+        .add_entity(
+            ms,
+            EntityCommon::new(l0),
+            Entity::Line(Line {
+                start: [0.0; 3],
+                end: [1.0, 0.0, 0.0],
+                thickness: 0.0,
+                extrusion: [0.0, 0.0, 1.0],
+            }),
+        )
+        .unwrap();
+    let other = d.add_block("OTHER").unwrap();
+    {
+        let (common, _) = d.entity_mut(line).unwrap();
+        common.entmode = 0;
+        common.obj.owner = other;
+    }
+    let v = d.validate();
+    assert!(errors(&v).is_empty(), "{v:#?}");
+    assert!(
+        d.write_diagnostics()
+            .iter()
+            .any(|x| x.handle == Some(line) && x.message.contains("lists it"))
+    );
+    let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+    assert!(warnings.iter().any(|x| x.handle == Some(line)));
+    let back = Drawing::from_bytes(&bytes).unwrap();
+    assert_eq!(back.owner_of(line), Some(ms));
+    assert!(errors(&back.validate()).is_empty());
+    // Listed by both blocks: ambiguous, refused.
+    if let Some(opendwg::object::EntityList::Owned(list)) =
+        d.block_record_mut(other).map(|b| &mut b.entities)
+    {
+        list.push(line);
+    }
+    assert!(!errors(&d.validate()).is_empty());
+    assert!(matches!(d.to_bytes(), Err(Error::Invalid(_))));
+}
+
+/// An xref block cannot own entities: `add_entity` refuses one, and an
+/// entity put in its list through `block_record_mut` is a validate error,
+/// so the save fails with `Error::Invalid`, not in the encoder.
+#[test]
+fn xref_blocks_own_no_entities() {
+    use opendwg::object::{Entity, EntityCommon, Line};
+    let mut d = Drawing::new();
+    let l0 = d.layer_by_name("0").unwrap();
+    let line = || {
+        Entity::Line(Line {
+            start: [0.0; 3],
+            end: [1.0, 0.0, 0.0],
+            thickness: 0.0,
+            extrusion: [0.0, 0.0, 1.0],
+        })
+    };
+    let x = d.add_block("X").unwrap();
+    let e = d.add_entity(x, EntityCommon::new(l0), line()).unwrap();
+    d.block_record_mut(x).unwrap().is_xref = true;
+    let refused = d.add_entity(x, EntityCommon::new(l0), line());
+    assert!(matches!(refused, Err(Error::Invalid(_))), "{refused:?}");
+    let v = d.validate();
+    assert!(
+        errors(&v)
+            .iter()
+            .any(|f| f.handle == Some(x) && f.message.contains("xref")),
+        "{v:#?}"
+    );
+    assert!(matches!(d.to_bytes(), Err(Error::Invalid(_))));
+    // Not an xref again, it saves with its entity.
+    d.block_record_mut(x).unwrap().is_xref = false;
+    assert!(errors(&d.validate()).is_empty());
+    let back = Drawing::from_bytes(&d.to_bytes().unwrap()).unwrap();
+    assert_eq!(back.owner_of(e), Some(x));
 }

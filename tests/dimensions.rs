@@ -1,5 +1,5 @@
-//! Corpus checks of the dimensions, leaders, tolerances and multileaders
-//! (Task 16): every entity of these types decodes typed, the counts match
+//! Corpus checks of the dimensions, leaders, tolerances and multileaders:
+//! every entity of these types decodes typed, the counts match
 //! the manifest, R2018 entities re-encode bit for bit, older versions
 //! convert, and values that pin ODS deviations are asserted on real data.
 //!
@@ -17,7 +17,8 @@ use opendwg::object::{
 };
 use opendwg::{Drawing, Handle, Version};
 
-/// The Task 16 entity types, by type name, with their manifest count keys.
+/// The entity types checked here, by type name, with their manifest count
+/// keys.
 const TYPES: [(&str, &str); 12] = [
     ("DIMENSION_ORDINATE", "dimension_ordinate_count"),
     ("DIMENSION_LINEAR", "dimension_linear_count"),

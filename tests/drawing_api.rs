@@ -1,4 +1,4 @@
-//! Task 20: the drawing's typed accessors and mutation API, on the R2018
+//! The drawing's typed accessors and mutation API, on the R2018
 //! corpus sample. After every mutation each touched object is encoded as
 //! R2018 and decoded back equal, and the cross-object structure (owner lists,
 //! table control entries, insert attributes, reactors, groups) has no
@@ -1140,6 +1140,7 @@ fn circular_block_references_refused_at_any_depth() {
         rows: 2,
         column_spacing: 1.0,
         row_spacing: 1.0,
+        read_attrib_code: Default::default(),
     });
     assert!(matches!(
         d.add_entity(c, EntityCommon::new(l0), minsert.clone()),
@@ -1170,6 +1171,7 @@ fn minsert_with_attribs() {
         rows: 2,
         column_spacing: 2.0,
         row_spacing: 2.0,
+        read_attrib_code: Default::default(),
     });
     let ms = d.model_space();
     let h = d
@@ -1845,4 +1847,67 @@ fn typed_getters() {
         .unwrap();
     d.layer_mut(red).unwrap().linetype = dashed;
     assert!(d.referrers(dashed).contains(&red));
+}
+
+/// An entity whose linetype is not a linetype, or a multiline whose line
+/// count is not its style's element count, is refused when added, as
+/// `validate()` would refuse it at save; with a real linetype and the
+/// style's count it is added and the drawing validates.
+#[test]
+fn add_entity_checks_reference_kinds_as_validate_does() {
+    use opendwg::Severity;
+    use opendwg::object::{LinetypeRef, MLine};
+    let mut d = Drawing::new();
+    let ms = d.model_space();
+    let l0 = layer0(&d);
+    let mut common = EntityCommon::new(l0);
+    common.linetype = LinetypeRef::Handle(l0);
+    let refused = d.add_entity(ms, common.clone(), line([0.0; 3], [1.0, 0.0, 0.0]));
+    assert!(
+        matches!(&refused, Err(Error::Invalid(e)) if e[0].message.contains("not a linetype")),
+        "{refused:?}"
+    );
+    let (continuous, _) = d
+        .linetypes()
+        .find(|(_, l)| l.entry.name == "Continuous")
+        .unwrap();
+    common.linetype = LinetypeRef::Handle(continuous);
+    d.add_entity(ms, common, line([0.0; 3], [1.0, 0.0, 0.0]))
+        .unwrap();
+
+    let (style, elements) = d
+        .objects()
+        .find_map(|(h, o)| match o {
+            Object::Other {
+                object: NonGraphical::MLineStyle(s),
+                ..
+            } => Some((h, s.elements.len())),
+            _ => None,
+        })
+        .unwrap();
+    let mline = |lines: usize| {
+        Entity::MLine(Box::new(MLine {
+            scale: 1.0,
+            justification: 0,
+            base_point: [0.0; 3],
+            extrusion: [0.0, 0.0, 1.0],
+            flags: 0,
+            lines_in_style: lines as u8,
+            vertices: Vec::new(),
+            style,
+        }))
+    };
+    let refused = d.add_entity(ms, EntityCommon::new(l0), mline(elements + 1));
+    assert!(
+        matches!(&refused, Err(Error::Invalid(e)) if e[0].message.contains("elements")),
+        "{refused:?}"
+    );
+    d.add_entity(ms, EntityCommon::new(l0), mline(elements))
+        .unwrap();
+    let errors: Vec<_> = d
+        .validate()
+        .into_iter()
+        .filter(|x| x.severity == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
 }

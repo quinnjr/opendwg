@@ -19,8 +19,8 @@ pub enum MLineLinetype {
     /// is BYLAYER and 32766 BYBLOCK, which the drawing resolves to handles
     /// on read. Other values are probably the index into the LTYPE control's
     /// entries (ACadSharp (MIT) resolves them as the linetype table's
-    /// `ElementAt(index)`), unconfirmed by the corpus (to be checked by Task
-    /// 26's oracle); they are kept, and the style has no R2018 form (see
+    /// `ElementAt(index)`), unconfirmed by the corpus and against AutoCAD;
+    /// they are kept, and the style has no R2018 form (see
     /// [`MLineStyle::is_convertible`]).
     Index(i16),
 }

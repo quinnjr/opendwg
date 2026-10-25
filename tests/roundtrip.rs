@@ -1,4 +1,4 @@
-//! Task 22: writing drawings as R2018. Every corpus file is read, written
+//! Writing drawings as R2018. Every corpus file is read, written
 //! with [`Drawing::to_bytes_at`] and read back: the second read has no
 //! diagnostics and the same model as the first (the save time, the handle
 //! seed and the application information aside). Files with objects R2018
@@ -208,7 +208,6 @@ fn expected_unconvertible(name: &str) -> BTreeMap<&'static str, usize> {
         ("REGION", 1),
         ("TABLECONTENT", 2),
         ("TABLEGEOMETRY", 2),
-        ("VISUALSTYLE", 24),
     ];
     let mut list: BTreeMap<&str, usize> = match name {
         "acadsharp-sample-ac1015" | "acadsharp-sample-ac1018" => {
@@ -367,7 +366,7 @@ fn texts(d: &Drawing) -> BTreeMap<Handle, String> {
         .collect()
 }
 
-/// Review Focus 2: TEXT and MTEXT strings survive a round trip exactly:
+/// TEXT and MTEXT strings survive a round trip exactly:
 /// the corpus files tagged `non_ascii`, and a drawing given a surrogate
 /// pair, an MTEXT `\U+` escape, CJK text and a layer named in Japanese.
 #[test]
@@ -441,13 +440,13 @@ fn roundtrip_preserves_non_ascii() {
     assert_eq!(texts(&back), texts(&d));
 }
 
-/// Review Focus 5: writing and reading are near-linear. 200k lines added to
+/// Writing and reading are near-linear. 200k lines added to
 /// a new drawing ([`Drawing::new_at`]) round-trip in under 10 s (release),
 /// and the cost per added line from 20k to 200k lines is within 2x of the
 /// cost per line of the first 20k (each time the median of three runs). The
 /// deterministic companion is `drawing::write::tests::write_work_is_linear`.
 #[test]
-#[ignore = "large; run in release (Task 27 acceptance)"]
+#[ignore = "large; run in release"]
 fn large_drawing_roundtrip_is_linear() {
     let base = Drawing::new_at(SAVED);
     let ms = base.model_space();
@@ -704,10 +703,15 @@ fn r2000_conversion() {
     assert_eq!(headers.len(), 4);
     let unconvertible = d.unconvertible_objects();
     remove_all(&mut d, &unconvertible, "ac1015");
+    // The only warnings: the 24 visual styles of the R2000 layout, written
+    // as AutoCAD's standard styles of their names.
+    let diags = d.write_diagnostics();
+    assert_eq!(diags.len(), 24, "{diags:?}");
     assert!(
-        d.write_diagnostics().is_empty(),
-        "{:?}",
-        d.write_diagnostics()
+        diags
+            .iter()
+            .all(|x| x.message.contains("VISUALSTYLE") && x.message.contains("standard style")),
+        "{diags:?}"
     );
     let back = roundtrip(&d, "ac1015");
     for h in headers {
@@ -807,7 +811,7 @@ fn layout_viewports(d: &Drawing, layout: Handle) -> Vec<Handle> {
 /// those changed since read: a new one is added, a removed one leaves, and
 /// an entry owned by another block stays. A viewport taken out of the
 /// block's entity list but still owned by the block is refused: its owner
-/// no longer lists it (Task 23's validation).
+/// no longer lists it (`Drawing::validate`).
 #[test]
 fn layout_viewports_are_refreshed() {
     let Some(base) = open(R2018) else { return };
@@ -1085,7 +1089,7 @@ fn class_counts_follow_the_objects() {
     assert!(d.classes.iter().all(|c| seen.contains(c.dxf_name.as_str())));
 }
 
-/// The corpus files with unconvertible objects (Task 25; the corpus has no
+/// The corpus files with unconvertible objects (the main corpus has no
 /// R2000/R2004 custom-object file, so the R2000 and R2004 samples stand in:
 /// their raw custom-class objects, SAT ACIS data and raw history objects).
 const WITH_UNCONVERTIBLES: [&str; 2] = ["acadsharp-sample-ac1015", "acadsharp-sample-ac1018"];

@@ -5,7 +5,12 @@
 //!
 //! 1. Objects that cannot be written as R2018 fail the write with
 //!    [`Error::UnconvertibleObjects`] (see [`Drawing::unconvertible_objects`]).
-//! 2. The caches and derived values the drawing keeps as read are refreshed
+//! 2. Required objects the drawing lacks and the writer can make (the
+//!    dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
+//!    dictionaries) are added to a copy, which is written instead, with a
+//!    warning each (see `drawing::repair`).
+//!
+//!    The caches and derived values the drawing keeps as read are refreshed
 //!    on copies (the drawing itself is not changed), and objects R2018 does
 //!    not have are left out (both listed below).
 //! 3. [`Drawing::validate`] checks the drawing as it will be written: the
@@ -45,6 +50,17 @@
 //!     ([`crate::object::AcisEntity::to_r2013`]): its SAB moves to a data
 //!     storage record keyed by its handle, and it gets a GUID derived from
 //!     $FINGERPRINTGUID and its handle ([`AcisGuid::derived`]).
+//!   - an object listed as owned (an extension dictionary, an entry of a
+//!     hard-owner dictionary) that stores a null owner gets its lister as
+//!     owner, with a warning (AutoCAD 2002's R14 round-trip data);
+//!   - an entity exactly one block record lists, whose owner names another
+//!     object, gets that block as owner (and entity mode), with a warning;
+//!   - a VISUALSTYLE stored in a layout older than R2018's (read before
+//!     R2013 without the marker of one AutoCAD saved in its older layout,
+//!     which is copied): replaced by an R2018 VISUALSTYLE with AutoCAD's
+//!     standard values for its name (compared without case), or
+//!     2dWireframe's values under a custom name, keeping its handle and
+//!     common data, with a warning each;
 //!   - `has_ds_binary_data` in each object's common data, derived: set
 //!     exactly on the objects with a record in the data storage section as
 //!     written (a converted ACIS entity gets it, an emptied one loses it).
@@ -92,12 +108,13 @@
 //!
 //! What each section is written as, by source version ("2010+" means read
 //! from R2010, R2013 or R2018); AutoCAD 2018's files in the corpus are the
-//! guide, and Task 26's oracle checks the decisions.
+//! guide; the decisions are unconfirmed against AutoCAD until the sign-off
+//! pack (`tests/common/pack.rs`) is checked in it.
 //!
 //! | Section | Written as |
 //! |---|---|
 //! | AuxHeader | Always written (AutoCAD always writes it): the source's, converted to the R2018 layout (the three maintenance version fields AutoCAD widens from `RS` to `RL` in R2018; ODS puts the extra bytes at the end, the corpus shows them there), with version 33 (AC1032), $TDCREATE, $TDUPDATE and $HANDSEED updated. Without one, or with an unknown layout (a warning), the ODS 27 fields with one save (see `aux_default`). |
-//! | ObjFreeSpace | Always written. 2010+: copied (the 89-byte form), with $TDUPDATE updated and the object count raised to the objects written when that is larger. Before: regenerated in that form (ODS 21 with 64-bit values, as the corpus has them). The count is "approximate" (ODS) and AutoCAD's exceeds the objects stored (949 for 842 in the R2018 sample); a copied count left above the objects after removals is not lowered. Task 26's oracle is to confirm AutoCAD accepts both. |
+//! | ObjFreeSpace | Always written. 2010+: copied (the 89-byte form), with $TDUPDATE updated and the object count raised to the objects written when that is larger. Before: regenerated in that form (ODS 21 with 64-bit values, as the corpus has them). The count is "approximate" (ODS) and AutoCAD's exceeds the objects stored (949 for 842 in the R2018 sample); a copied count left above the objects after removals is not lowered. Unconfirmed against AutoCAD: whether it accepts both. |
 //! | Template | Always written (ODS: mandatory from R2004). R2007+: copied (UTF-16 description). Before: converted (description re-encoded). Without one: an empty description. $MEASUREMENT is the header's when set, else the source's, else 0. A description too long for its 16-bit length is left empty, with a warning. |
 //! | RevHistory | Always written: copied (the same 16 bytes in every R2004+ corpus file), else ODS's R21 form (0, 0, 1, 0). |
 //! | AppInfoHistory | Copied (the same form from R2004 to R2018 in the corpus); its content is unknown, so without one none is written. |
@@ -388,6 +405,8 @@ impl Drawing {
     /// [`crate::object::AcisEntity`]), and the other typed values R2018 has
     /// no form for (see [`Object`]). A plot view named after no VIEW is not
     /// listed: saving clears it, with a warning ([`Drawing::write_diagnostics`]).
+    /// A VISUALSTYLE in an older layout is not listed either: the writer
+    /// replaces it (see the module documentation).
     /// Objects the writer leaves out (a CELLSTYLEMAP absorbed by its
     /// converted table style, the R2000 VP_ENT_HDR table) are not listed,
     /// except a VP_ENT_HDR or its control that has an extension dictionary or
@@ -397,48 +416,27 @@ impl Drawing {
         self.objects
             .iter()
             .filter(|(h, o)| {
-                (!o.is_convertible() && !drops.dropped.contains(h)) || drops.blocked.contains(h)
+                (!o.is_convertible()
+                    && !drops.dropped.contains(h)
+                    && !Self::replaced_visual_style(o))
+                    || drops.blocked.contains(h)
             })
             .map(|(&h, o)| (h, o.type_name().into_owned()))
             .collect()
     }
 
-    /// Warnings about what writing the drawing as R2018 leaves out (layout
-    /// viewport entries naming no object, sections the writer cannot carry
-    /// over; see the module documentation of `drawing::write`). They do not
-    /// stop the write.
+    /// Warnings about what writing the drawing as R2018 adds (required
+    /// objects the drawing lacks, see `drawing::repair`) and leaves out
+    /// (layout viewport entries naming no object, sections the writer cannot
+    /// carry over; see the module documentation of `drawing::write`). They
+    /// do not stop the write.
     pub fn write_diagnostics(&self) -> Vec<Diagnostic> {
-        let named_back: HashSet<Handle> = own_layout_viewports(&self.objects)
-            .0
-            .into_iter()
-            .map(|(h, _)| h)
-            .collect();
-        let dropped = self.drops().dropped;
-        let mut diags: Vec<Diagnostic> = self
-            .dangling_layout_viewports(&named_back, |v| {
-                dropped.contains(&v) || !self.objects.contains_key(&v)
-            })
-            .iter()
-            .map(|(h, missing)| dangling_viewports_warning(*h, missing))
-            .collect();
-        diags.extend(
-            self.plot_view_names()
-                .into_iter()
-                .filter_map(|(_, r)| r.err()),
-        );
-        let mut header = self.header.clone();
-        header.handseed = self.next_handseed();
-        let summary_len = self
-            .summary
-            .clone()
-            .unwrap_or_default()
-            .encode_r2018(&header)
-            .map_or(0, |s| s.len());
-        match r2018_preview_address(Some(summary_len)) {
-            Ok(at) => diags.extend(self.other_sections(&header, self.objects.len(), at).1),
-            Err(e) => diags.push(warning(None, format!("the file cannot be laid out: {e}"))),
+        // A dry run of the write: the same steps, without the checks that
+        // refuse it and without encoding the objects.
+        match self.write(JulianDate::default(), &mut WriteWork::default(), true) {
+            Ok((_, diags)) => diags,
+            Err(e) => vec![warning(None, format!("the file cannot be laid out: {e}"))],
         }
-        diags
     }
 
     /// The drawing as an R2018 DWG file, saved now (see
@@ -453,8 +451,7 @@ impl Drawing {
     /// out ([`Drawing::write_diagnostics`]): an application can show them
     /// after saving. They never stop the write.
     pub fn to_bytes_with_diagnostics(&self) -> Result<(Vec<u8>, Vec<Diagnostic>)> {
-        let bytes = self.to_bytes()?;
-        Ok((bytes, self.write_diagnostics()))
+        self.write(julian_now(), &mut WriteWork::default(), false)
     }
 
     /// The drawing as an R2018 DWG file whose $TDUPDATE is `saved`. The same
@@ -468,17 +465,44 @@ impl Drawing {
     /// drawing is not changed. Sections left
     /// out (with a warning) are listed by [`Drawing::write_diagnostics`].
     pub fn to_bytes_at(&self, saved: JulianDate) -> Result<Vec<u8>> {
-        self.write(saved, &mut WriteWork::default())
+        self.write(saved, &mut WriteWork::default(), false)
+            .map(|(bytes, _)| bytes)
     }
 
     /// [`Drawing::to_bytes_at`], counting its work in `work`: steps 1 to 3
-    /// of the module documentation, then [`Drawing::encode_file`].
-    fn write(&self, saved: JulianDate, work: &mut WriteWork) -> Result<Vec<u8>> {
-        let unconvertible = self.unconvertible_objects();
-        if !unconvertible.is_empty() {
-            return Err(Error::UnconvertibleObjects(unconvertible));
+    /// of the module documentation, then [`Drawing::encode_file`]; with the
+    /// warnings about what the write adds and leaves out. A `dry_run` (for
+    /// [`Drawing::write_diagnostics`]) refuses nothing and returns no bytes,
+    /// only the warnings, which are thus those of a real write.
+    fn write(
+        &self,
+        saved: JulianDate,
+        work: &mut WriteWork,
+        dry_run: bool,
+    ) -> Result<(Vec<u8>, Vec<Diagnostic>)> {
+        if !dry_run {
+            let unconvertible = self.unconvertible_objects();
+            if !unconvertible.is_empty() {
+                return Err(Error::UnconvertibleObjects(unconvertible));
+            }
         }
-        let changes = self.refreshed(work);
+        if let Some((repaired, mut diags)) = self.repaired() {
+            let (bytes, more) = repaired.write(saved, work, dry_run)?;
+            diags.extend(more);
+            return Ok((bytes, diags));
+        }
+        let mut changes = self.refreshed(work);
+        let mut diags = std::mem::take(&mut changes.warnings);
+        if dry_run {
+            let written = self.objects.len() - changes.dropped.len();
+            // A layout that fails is one more warning: those found so far
+            // are kept.
+            match self.sections(saved, written) {
+                Ok((_, _, _, _, warnings)) => diags.extend(warnings),
+                Err(e) => diags.push(warning(None, format!("the file cannot be laid out: {e}"))),
+            }
+            return Ok((Vec::new(), diags));
+        }
         let invalid: Vec<Diagnostic> = self
             .validate_written(&changes, &mut 0)
             .into_iter()
@@ -487,17 +511,45 @@ impl Drawing {
         if !invalid.is_empty() {
             return Err(Error::Invalid(invalid));
         }
-        self.encode_file(saved, work, &changes)
+        let (bytes, warnings) = self.encode_file(saved, work, changes)?;
+        diags.extend(warnings);
+        Ok((bytes, diags))
+    }
+
+    /// The header as written, the summary information, the preview address
+    /// and the sections other than the objects, the object map, the header,
+    /// the classes and the data storage, with the warnings about sections
+    /// left out, for a file of `objects` objects.
+    #[allow(clippy::type_complexity)]
+    fn sections(
+        &self,
+        saved: JulianDate,
+        objects: usize,
+    ) -> Result<(
+        HeaderVars,
+        Vec<u8>,
+        u64,
+        BTreeMap<SectionName, Vec<u8>>,
+        Vec<Diagnostic>,
+    )> {
+        let mut header = self.header.clone();
+        header.handseed = self.next_handseed();
+        header.tdupdate = saved;
+        let summary = self.summary.clone().unwrap_or_default();
+        let summary = summary.encode_r2018(&header)?;
+        let preview_address = r2018_preview_address(Some(summary.len()))?;
+        let (sections, diags) = self.other_sections(&header, objects, preview_address);
+        Ok((header, summary, preview_address, sections, diags))
     }
 
     /// The file, with the objects as `changes` has them (steps 4 and 5 of the
-    /// module documentation).
+    /// module documentation), and the warnings about sections left out.
     fn encode_file(
         &self,
         saved: JulianDate,
         work: &mut WriteWork,
-        changes: &Changes,
-    ) -> Result<Vec<u8>> {
+        mut changes: Changes,
+    ) -> Result<(Vec<u8>, Vec<Diagnostic>)> {
         // Objects: "AcDb:AcDbObjects" starts with the RL 0x0DCA (ODS 20.1;
         // every R2004+ corpus file), locations count from the section start.
         let mut objects = 0x0DCAu32.to_le_bytes().to_vec();
@@ -521,9 +573,8 @@ impl Drawing {
         }
         work.class_probes += index.probes.get();
 
-        let mut header = self.header.clone();
-        header.handseed = self.next_handseed();
-        header.tdupdate = saved;
+        let (header, summary, preview_address, mut sections, diags) =
+            self.sections(saved, map.len())?;
         let mut classes = self.classes.clone();
         for c in &mut classes {
             let now = counts.get(&c.class_number).copied().unwrap_or(0);
@@ -540,11 +591,7 @@ impl Drawing {
             };
         }
 
-        let summary = self.summary.clone().unwrap_or_default();
-        let summary = summary.encode_r2018(&header)?;
-        let preview_address = r2018_preview_address(Some(summary.len()))?;
-        let (mut sections, _) = self.other_sections(&header, map.len(), preview_address);
-        if let Some(acds) = self.data_storage_section(changes)? {
+        if let Some(acds) = self.data_storage_section(&mut changes)? {
             sections.insert(SectionName::AcDsPrototype, acds);
         }
         sections.insert(SectionName::Header, header::encode_r2018(&header)?);
@@ -572,7 +619,7 @@ impl Drawing {
             file_header: if r2018 { self.read.file_header } else { None },
             warnings: Vec::new(),
         };
-        write_r2018(&raw)
+        Ok((write_r2018(&raw)?, diags))
     }
 
     /// Write the drawing as an R2018 DWG file at `path`, saved now (see
@@ -761,7 +808,210 @@ impl Drawing {
         self.refresh_block_inserts(&mut changes);
         self.refresh_attdef_flags(&mut changes);
         self.refresh_plot_views(&mut changes);
+        self.refresh_null_owners(&mut changes);
+        self.refresh_entity_owners(&mut changes);
+        self.refresh_visual_styles(&mut changes);
         changes
+    }
+
+    /// Whether `obj` is a VISUALSTYLE the writer replaces (step 2): a raw one
+    /// in a layout older than R2018's (read before R2013, without the marker
+    /// of one AutoCAD saved in its older layout, see
+    /// `object::saved_by_object_version`), which cannot be copied.
+    fn replaced_visual_style(obj: &Object) -> bool {
+        matches!(obj, Object::Other {
+            object: NonGraphical::Unknown(r),
+            ..
+        } if r.class_name.as_deref() == Some("VISUALSTYLE"))
+            && !obj.is_convertible()
+    }
+
+    /// Replace each VISUALSTYLE [`Drawing::replaced_visual_style`] names by
+    /// an R2018 one, with a warning: AutoCAD's standard style of its name
+    /// (compared without case), or `2dWireframe`'s values under its own
+    /// name. Its handle and common data (owner, reactors, extension
+    /// dictionary, extended data) stay, so the views, viewports and VPORTs
+    /// naming it keep a valid reference. The name is the object's own text,
+    /// else its owner dictionary's entry for it.
+    fn refresh_visual_styles(&self, changes: &mut Changes) {
+        let codepage = self.header.dwgcodepage;
+        for (&h, obj) in &self.objects {
+            if !Self::replaced_visual_style(obj) {
+                continue;
+            }
+            let Object::Other {
+                common,
+                object: NonGraphical::Unknown(raw),
+            } = obj
+            else {
+                continue;
+            };
+            let listed = || match self.objects.get(&common.owner) {
+                Some(Object::Other {
+                    object: NonGraphical::Dictionary(d),
+                    ..
+                }) => d
+                    .entries
+                    .iter()
+                    .find(|&&(_, e)| e == h)
+                    .map(|(n, _)| n.clone()),
+                _ => None,
+            };
+            let name = raw
+                .first_text(codepage)
+                .filter(|n| !n.is_empty())
+                .or_else(listed)
+                .unwrap_or_else(|| "2dWireframe".into());
+            let style = super::new::standard_visual_style(&name);
+            let standard = super::new::is_standard_visual_style(&name);
+            let message = format!(
+                "VISUALSTYLE {h} \"{name}\" is stored in the layout of {:?}, which R2018 cannot \
+                 hold; it is written as {}",
+                raw.source_version,
+                if standard {
+                    "AutoCAD's standard style of that name"
+                } else {
+                    "a style with 2dWireframe's settings under its own name"
+                }
+            );
+            changes.replaced.insert(
+                h,
+                Object::Other {
+                    common: common.clone(),
+                    object: NonGraphical::VisualStyle(Box::new(style)),
+                },
+            );
+            changes.warnings.push(warning(Some(h), message));
+        }
+    }
+
+    /// The entities exactly one block record lists whose owner (stored, or
+    /// given by the entity mode) is another object, with that block and a
+    /// warning. The list is what AutoCAD draws the entity in; the owner
+    /// only repeats it. An entity listed by two blocks, or by none, is left
+    /// to `validate()`, which refuses it.
+    fn misowned_entities(&self) -> Vec<(Handle, Handle, Diagnostic)> {
+        let mut listers: HashMap<Handle, (Handle, usize)> = HashMap::new();
+        for (&b, obj) in &self.objects {
+            if let Object::Other {
+                object: NonGraphical::BlockRecord(rec),
+                ..
+            } = obj
+            {
+                if let EntityList::Owned(list) = &rec.entities {
+                    for &e in list {
+                        let entry = listers.entry(e).or_insert((b, 0));
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+        let mut out: Vec<(Handle, Handle, Diagnostic)> = listers
+            .into_iter()
+            .filter(|&(e, (b, n))| {
+                n == 1
+                    && matches!(self.objects.get(&e), Some(Object::Entity { .. }))
+                    && self.owner_of(e) != Some(b)
+            })
+            .map(|(e, (b, _))| {
+                let name = |h: Handle| {
+                    self.objects
+                        .get(&h)
+                        .map_or_else(|| h.to_string(), |o| format!("{} {h}", o.type_name()))
+                };
+                let owner = self.owner_of(e).unwrap_or_default();
+                let message = format!(
+                    "{}: its owner is {owner}, but {} lists it among its entities; it is \
+                     written with that block as owner",
+                    name(e),
+                    name(b)
+                );
+                (e, b, warning(Some(e), message))
+            })
+            .collect();
+        out.sort_by_key(|&(e, _, _)| e);
+        out
+    }
+
+    /// Give the entities [`Drawing::misowned_entities`] finds the block that
+    /// lists them as owner (step 2), as `add_entity` places an entity: model
+    /// space and the header's paper space by entity mode, other blocks as
+    /// stored owners.
+    fn refresh_entity_owners(&self, changes: &mut Changes) {
+        let model = self.model_space();
+        let paper = self.header.block_record_paper_space;
+        for (e, block, w) in self.misowned_entities() {
+            if let Some(Object::Entity { common, .. }) = changes.edit(self, e) {
+                let (entmode, owner) = if block == model {
+                    (2, Handle(0))
+                } else if block == paper {
+                    (1, Handle(0))
+                } else {
+                    (0, block)
+                };
+                common.entmode = entmode;
+                common.obj.owner = owner;
+                common.obj.owner_relative = false;
+                changes.warnings.push(w);
+            }
+        }
+    }
+
+    /// The objects listed as owned that store a null owner, with their
+    /// lister and a warning: an extension dictionary, an entry of a
+    /// hard-owner dictionary. AutoCAD 2002 and 2004 wrote a DIMSTYLE's R14
+    /// round-trip extension dictionary and its XRECORD so (`arx-02`,
+    /// `arx-03` of the extended corpus).
+    fn null_owners(&self) -> Vec<(Handle, Handle, Diagnostic)> {
+        let null = |h: Handle| matches!(self.objects.get(&h), Some(Object::Other { common, .. }) if common.owner.0 == 0);
+        let name = |h: Handle| {
+            self.objects
+                .get(&h)
+                .map_or_else(|| h.to_string(), |o| format!("{} {h}", o.type_name()))
+        };
+        let mut out: Vec<(Handle, Handle, Diagnostic)> = Vec::new();
+        let mut seen = HashSet::new();
+        for (&h, obj) in &self.objects {
+            let mut listed = Vec::new();
+            if let Some(x) = obj.object_common().xdict {
+                listed.push((x, "its extension dictionary"));
+            }
+            if let Object::Other {
+                object: NonGraphical::Dictionary(d),
+                ..
+            } = obj
+            {
+                if d.is_hard_owner() {
+                    listed.extend(d.entries.iter().map(|&(_, e)| (e, "an entry")));
+                }
+            }
+            for (child, how) in listed {
+                if child != h && null(child) && seen.insert(child) {
+                    let message = format!(
+                        "{}: its owner is null, but {} lists it as {how}; it is written with \
+                         that owner",
+                        name(child),
+                        name(h)
+                    );
+                    out.push((child, h, warning(Some(child), message)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Set the null owners [`Drawing::null_owners`] finds (step 2), but not
+    /// to a lister the writer leaves out.
+    fn refresh_null_owners(&self, changes: &mut Changes) {
+        for (child, owner, w) in self.null_owners() {
+            if changes.dropped.contains(&owner) {
+                continue;
+            }
+            if let Some(obj) = changes.edit(self, child) {
+                obj.object_common_mut().owner = owner;
+                changes.warnings.push(w);
+            }
+        }
     }
 
     /// The layouts and plot settings that name a plot view (R2000) and have
@@ -980,7 +1230,7 @@ impl Drawing {
     /// without a record, fails the write with [`Error::Invalid`], a
     /// diagnostic per entity. A data storage section that could not be
     /// decoded is copied unchecked.
-    fn data_storage_section(&self, changes: &Changes) -> Result<Option<Vec<u8>>> {
+    fn data_storage_section(&self, changes: &mut Changes) -> Result<Option<Vec<u8>>> {
         let undecoded = self.storage_undecoded();
         let mut storage = match &self.data_storage {
             Some(s) => Some(s.clone()),
@@ -995,9 +1245,7 @@ impl Drawing {
             None => Some(DataStorage::with_default_schemas()),
         };
         if let Some(storage) = &mut storage {
-            for (h, data) in &changes.acis_data {
-                storage.set_acis_data(*h, data.clone());
-            }
+            storage.set_acis_data_all(std::mem::take(&mut changes.acis_data));
             // Records of objects not written leave, and those of entities
             // emptied (converted from no data in this save).
             storage.retain_acis(|h| {
@@ -2123,10 +2371,11 @@ mod tests {
     fn write_unvalidated(d: &Drawing, work: &mut WriteWork) -> Vec<u8> {
         assert!(d.unconvertible_objects().is_empty());
         let changes = d.refreshed(work);
-        d.encode_file(SAVED, work, &changes).unwrap()
+        d.encode_file(SAVED, work, changes).unwrap().0
     }
 
-    /// Review Focus 5's deterministic companion: the writer's work grows
+    /// The deterministic companion of `large_drawing_roundtrip_is_linear`
+    /// (tests/roundtrip.rs): the writer's work grows
     /// linearly with the objects.
     #[test]
     fn write_work_is_linear() {
@@ -2410,9 +2659,9 @@ mod tests {
     /// A proxy entity read from R2000 or R2004 is convertible (its data is
     /// in the object format its own version fields name): added to a new
     /// R2018 drawing, it saves and reads back with its payload and object
-    /// ids unchanged (Task 25; no corpus file has proxy entities). This shows
-    /// the library's own consistency only: whether AutoCAD accepts such a
-    /// proxy is an oracle item (Task 26).
+    /// ids unchanged (no corpus file has proxy entities). This shows the
+    /// library's own consistency only: whether AutoCAD accepts such a proxy
+    /// is unconfirmed against AutoCAD.
     #[test]
     fn proxy_entity_from_old_file_roundtrips() {
         use crate::bits::BitWriter;
@@ -2659,6 +2908,143 @@ mod tests {
         assert!(w[0].message.contains("Nowhere") && w[0].message.contains(&name));
         assert_eq!(d.write_diagnostics(), diags);
         assert_eq!(written_plot_view(&bytes, layout), Handle(0));
+    }
+
+    /// An extension dictionary and a hard-owner dictionary's entry that
+    /// store a null owner (AutoCAD 2002's R14 round-trip dictionary of a
+    /// DIMSTYLE and its XRECORD: `arx-02` of the extended corpus) are
+    /// written with their lister as owner, with a warning each.
+    #[test]
+    fn null_owners_of_listed_objects_are_set() {
+        let mut d = Drawing::new();
+        let layers = d.header.layer_control;
+        let xdict = d.get(layers).unwrap().object_common().xdict.unwrap();
+        let Some(Object::Other {
+            object: NonGraphical::Dictionary(x),
+            ..
+        }) = d.get(xdict)
+        else {
+            panic!("an extension dictionary");
+        };
+        assert!(x.is_hard_owner());
+        let (_, states) = x.entries[0].clone();
+        for h in [xdict, states] {
+            d.get_mut(h).unwrap().object_common_mut().owner = Handle(0);
+        }
+        let diags = d.validate();
+        assert!(
+            diags.iter().all(|x| x.severity != Severity::Error),
+            "{diags:#?}"
+        );
+        let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+        let named: Vec<Option<Handle>> = warnings
+            .iter()
+            .filter(|w| w.message.contains("null"))
+            .map(|w| w.handle)
+            .collect();
+        assert_eq!(named, [Some(xdict), Some(states)], "{warnings:#?}");
+        let back = Drawing::from_bytes(&bytes).unwrap();
+        assert_eq!(back.get(xdict).unwrap().object_common().owner, layers);
+        assert_eq!(back.get(states).unwrap().object_common().owner, xdict);
+        assert!(back.validate().is_empty(), "{:#?}", back.validate());
+        assert_eq!(d.get(xdict).unwrap().object_common().owner, Handle(0));
+    }
+
+    /// When the file cannot be laid out (a summary title too long to
+    /// encode), `write_diagnostics` still lists the warnings found before,
+    /// with one more for the layout.
+    #[test]
+    fn layout_failure_keeps_earlier_warnings() {
+        let mut d = Drawing::new();
+        let layers = d.header.layer_control;
+        let xdict = d.get(layers).unwrap().object_common().xdict.unwrap();
+        d.get_mut(xdict).unwrap().object_common_mut().owner = Handle(0);
+        let mut summary = d.summary.clone().unwrap_or_default();
+        summary.title = "x".repeat(70_000);
+        d.summary = Some(summary);
+        let diags = d.write_diagnostics();
+        assert!(
+            diags.iter().any(|x| x.message.contains("null")),
+            "{diags:#?}"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|x| x.message.contains("cannot be laid out"))
+        );
+        assert!(d.to_bytes().is_err());
+    }
+
+    /// A VISUALSTYLE in an R2007 layout (raw, without the "saved by object
+    /// version" marker) is not listed as unconvertible: the writer replaces
+    /// it by AutoCAD's standard style of its name (without case), or by
+    /// 2dWireframe's values under a custom name, keeping its handle and
+    /// common data, with a warning each. The drawing keeps the raw object.
+    #[test]
+    fn old_visual_styles_are_replaced_at_save() {
+        use crate::bits::BitWriter;
+        use crate::object::RawObject;
+        let mut d = Drawing::new();
+        let styles: Vec<Handle> = d
+            .objects
+            .iter()
+            .filter(|(_, o)| o.type_name() == "VISUALSTYLE")
+            .map(|(&h, _)| h)
+            .take(2)
+            .collect();
+        for (&h, name) in styles.iter().zip(["realistic", "My Style"]) {
+            let mut sw = BitWriter::new();
+            sw.write_tu(name).unwrap();
+            let bits = sw.bit_len();
+            let raw = RawObject {
+                type_code: 500,
+                class_name: Some("VISUALSTYLE".into()),
+                source_version: Version::R2007,
+                data: vec![0x55],
+                data_bits: 7,
+                strings: Some((sw.into_bytes(), bits)),
+                handles: Vec::new(),
+                tail_handles_raw: Vec::new(),
+                tail_handle_bits: 0,
+            };
+            if let Some(Object::Other { object, .. }) = d.objects.get_mut(&h) {
+                *object = NonGraphical::Unknown(raw);
+            }
+        }
+        d.ref_index = Default::default();
+        assert!(d.unconvertible_objects().is_empty());
+        let before: Vec<Object> = styles.iter().map(|h| d.objects[h].clone()).collect();
+        let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+        let named: Vec<Option<Handle>> = warnings.iter().map(|w| w.handle).collect();
+        assert_eq!(named, styles.iter().map(|&h| Some(h)).collect::<Vec<_>>());
+        assert!(warnings[0].message.contains("standard style"));
+        assert!(warnings[1].message.contains("2dWireframe"));
+        let back = Drawing::from_bytes(&bytes).unwrap();
+        assert!(back.diagnostics().is_empty(), "{:?}", back.diagnostics());
+        assert!(back.validate().is_empty(), "{:?}", back.validate());
+        let wireframe = super::super::new::standard_visual_style("2dWireframe");
+        let realistic = super::super::new::standard_visual_style("Realistic");
+        for ((h, was), (name, like)) in styles
+            .iter()
+            .zip(&before)
+            .zip([("realistic", realistic), ("My Style", wireframe)])
+        {
+            let Some(Object::Other {
+                common,
+                object: NonGraphical::VisualStyle(v),
+            }) = back.get(*h)
+            else {
+                panic!("{h} not an R2018 visual style");
+            };
+            assert_eq!(common, was.object_common());
+            assert_eq!(v.name, name);
+            assert_eq!(
+                (v.style_type, &v.properties),
+                (like.style_type, &like.properties)
+            );
+        }
+        // The drawing itself keeps the raw objects.
+        assert!(styles.iter().all(|h| d.objects[h].raw().is_some()));
     }
 
     #[test]

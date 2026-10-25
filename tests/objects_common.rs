@@ -1,4 +1,4 @@
-//! Corpus check of the object streams and common data (Task 10): every object
+//! Corpus check of the object streams and common data: every object
 //! in every fetched sample splits with a valid CRC, every fixed-type object
 //! and entity decodes its common data, and the decoded data re-encodes to
 //! R2018 and decodes back equal. Layer and linetype references must resolve

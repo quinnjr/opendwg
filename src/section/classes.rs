@@ -114,7 +114,7 @@ impl DxfClass {
 /// version R18, maintenance 0; R18 is written as 25, the DWG version of
 /// the corpus's R18 classes TABLESTYLE and ACAD_TABLE); PLOTSETTINGS,
 /// which neither has, takes those of LAYOUT, whose C++ class derives from
-/// it. These three are for Task 26's oracle to confirm.
+/// it. These three are unconfirmed against AutoCAD.
 #[rustfmt::skip]
 const KNOWN_CLASSES: [(&str, &str, &str, u16, u16, u32, u32); 29] = [
     ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault", "ObjectDBX Classes", 0x0, ITEM_CLASS_OBJECT, 22, 42),
@@ -250,11 +250,11 @@ fn decode_counted(
     if version >= Version::R2004 {
         let _max_class_number = r.data.read_bs()?;
         let zeros = [r.data.read_rc()?, r.data.read_rc()?];
-        let flag = r.data.read_b()?;
-        if zeros != [0, 0] || !flag {
-            extra.push(format!(
-                "classes: preamble {zeros:02X?} {flag} differs from 00 00 true"
-            ));
+        // AutoCAD 2007 and later set this bit; AutoCAD 2004 left it clear
+        // (`arx-05`, `arx-09`, `arx-10` of the extended corpus).
+        let _flag = r.data.read_b()?;
+        if zeros != [0, 0] {
+            extra.push(format!("classes: preamble {zeros:02X?} differs from 00 00"));
         }
     }
     let mut classes = Vec::new();
@@ -439,6 +439,40 @@ mod tests {
         out.extend_from_slice(&crc.to_le_bytes());
         out.extend_from_slice(&END_SENTINEL);
         out
+    }
+
+    /// An R2004 section's preamble: AutoCAD 2004 writes the bit after the
+    /// two zero bytes clear (`arx-05`, `arx-09`, `arx-10` of the extended
+    /// corpus), AutoCAD 2007 and later set; either reads without a warning.
+    /// Non-zero bytes there are reported.
+    #[test]
+    fn r2004_preamble_flag_either_way() {
+        for (zeros, flag, warned) in [
+            ([0, 0], true, false),
+            ([0, 0], false, false),
+            ([0, 1], true, true),
+        ] {
+            let mut w = BitWriter::new();
+            w.write_bs(500);
+            w.write_rc(zeros[0]);
+            w.write_rc(zeros[1]);
+            w.write_b(flag);
+            w.write_bs(500);
+            w.write_bs(0);
+            w.write_tv_raw(b"App").unwrap();
+            w.write_tv_raw(b"AcDbThing").unwrap();
+            w.write_tv_raw(b"THING").unwrap();
+            w.write_b(false);
+            w.write_bs(ITEM_CLASS_OBJECT as i16);
+            for v in [1, 0, 0, 0, 0] {
+                w.write_bl(v);
+            }
+            let bytes = frame_r2000(&w.into_bytes());
+            let (c, diags) = decode_with_diagnostics(&bytes, Version::R2004, 30).unwrap();
+            assert_eq!(c.len(), 1);
+            assert_eq!(c[0].dxf_name, "THING");
+            assert_eq!(!diags.is_empty(), warned, "{zeros:?} {flag}: {diags:?}");
+        }
     }
 
     #[test]

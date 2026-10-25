@@ -19,30 +19,41 @@
 //!   the $HANDSEED written (the writer raises the seed past every handle, so
 //!   only the largest possible handle);
 //! - a hard owner or hard pointer reference (codes 3 and 5) to an object that
-//!   does not exist, and an extension dictionary that does not exist; an
+//!   does not exist (but an XRECORD's: its items are application data, and
+//!   AutoCAD keeps stale ones), and an extension dictionary that does not
+//!   exist; an
 //!   entity's layer and linetype are hard pointers, and must be a layer and
 //!   a linetype;
 //! - an owner that does not list the object (an entity in
 //!   its block record's entity list, its insert's attributes or its
 //!   polyline's vertices, a SEQEND, BLOCK or ENDBLK; a table record among its
 //!   control's entries; a dictionary entry; an extension dictionary by its
-//!   object; any other owned object among its owner's references);
+//!   object; any other owned object among its owner's references), but
+//!   when the owner is a dictionary (its entries are soft owner references,
+//!   and AutoCAD's own files have objects their owner dictionary does not
+//!   list) or either is a raw object (a class the library does not model,
+//!   whose ownership semantics are unknown: Civil 3D's AECC styles);
 //! - an object listed as owned (a hard owner reference, an entity list, a
 //!   table control's entry, a hard-owner dictionary's entry, an extension
-//!   dictionary) whose owner is another object;
+//!   dictionary) whose owner is another object, but when either is a raw
+//!   object (a null owner of a modelled object the writer sets instead, see
+//!   `drawing::write`);
 //! - a missing required table, record or dictionary: the nine table controls,
 //!   layer `0`, linetypes `ByLayer`, `ByBlock` and `Continuous`, text style
 //!   and dimension style `Standard`, application `ACAD`, block records
 //!   `*Model_Space` and `*Paper_Space`, the named object dictionary with
 //!   `ACAD_GROUP`, `ACAD_MLINESTYLE`, `ACAD_LAYOUT`, `ACAD_PLOTSETTINGS` and
 //!   `ACAD_PLOTSTYLENAME`, and layouts for model space and the header's paper
-//!   space in the layout dictionary;
+//!   space in the layout dictionary (but the dimension style `Standard` and
+//!   the `ACAD_GROUP` and `ACAD_PLOTSETTINGS` dictionaries, which the writer
+//!   adds when they are missing, a warning: see `drawing::repair`);
 //! - a header handle variable naming an object that does not exist or is
 //!   not of its kind, and a null $CLAYER, $TEXTSTYLE, $DIMSTYLE or $CELTYPE;
 //! - two records of one table with the same name, compared without case
 //!   (but block records named `*...`: AutoCAD writes anonymous and extra
 //!   layout blocks under repeated names, `*U`, `*D`, `*T`, `*Paper_Space`,
-//!   and numbers them on load; every corpus file has them);
+//!   and numbers them on load; every corpus file has them; and VPORTs named
+//!   `*Active`: AutoCAD writes one per tiled model space viewport);
 //! - classes: a class number below 500 or used twice, an object whose
 //!   class says the other kind (an item class id other than entity, 0x1F2,
 //!   says object, as the reader takes it; the writer writes it as 0x1F3),
@@ -59,7 +70,8 @@
 //!   flag, so this only guards that derivation; not checked when the
 //!   section is kept undecoded);
 //!
-//! Warnings: soft owner and soft pointer references (codes 2 and 4) to
+//! Warnings: the exceptions above (as warnings), soft owner and soft
+//! pointer references (codes 2 and 4) to
 //! objects that do not exist, reactors that do not exist and owners (a soft
 //! pointer) that do not exist (real AutoCAD files have them all: they load
 //! and save), an XRECORD 480-481 item (a hard pointer stored as text) whose
@@ -252,6 +264,14 @@ impl Drawing {
     /// once. [`Drawing::to_bytes`] refuses a drawing with
     /// [`Severity::Error`] findings.
     pub fn validate(&self) -> Vec<Diagnostic> {
+        // Required objects the writer adds (see `drawing::repair`) are
+        // warnings; the drawing is checked with them.
+        if let Some((repaired, mut found)) = self.repaired() {
+            found.extend(repaired.validate());
+            found.sort_by(|a, b| (a.handle, &a.message).cmp(&(b.handle, &b.message)));
+            found.dedup();
+            return found;
+        }
         let changes = self.refreshed(&mut WriteWork::default());
         self.validate_written(&changes, &mut 0)
     }
@@ -301,6 +321,7 @@ impl Drawing {
         v.entities();
         v.groups();
         v.tables();
+        v.xref_blocks();
         v.named_objects();
         v.header();
         v.ds_flags();
@@ -558,8 +579,17 @@ impl<'a> Validator<'a> {
                     self.name(h),
                     code_name(code)
                 );
+                // An XRECORD's hard references are its items (application
+                // data): AutoCAD keeps stale ones (`adsk-cab-04`).
+                let xrecord = matches!(
+                    obj,
+                    Object::Other {
+                        object: NonGraphical::XRecord(_),
+                        ..
+                    }
+                );
                 match code {
-                    HARD_OWNER | HARD_POINTER => self.error(Some(h), message),
+                    HARD_OWNER | HARD_POINTER if !xrecord => self.error(Some(h), message),
                     _ => self.warning(Some(h), message),
                 }
             }
@@ -611,8 +641,27 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// Whether `h` is a raw object (a class the library does not model):
+    /// which of its references own what is not known, so its ownership
+    /// findings are warnings. Civil 3D's AECC styles name, as hard owner
+    /// references, styles another style owns (`camber-*`, `c3dtk-01`).
+    fn unmodelled(&self, h: Handle) -> bool {
+        self.get(h).is_some_and(|o| o.raw().is_some())
+    }
+
+    /// Whether an ownership finding between `child` and `owner` is only a
+    /// warning: one of them is raw (see [`Self::unmodelled`]) and the child
+    /// is not an entity. An entity's owner and the block list it is in are
+    /// always checked (the writer repairs an entity exactly one block
+    /// lists; see `Drawing::misowned_entities`), raw or not: the evidence
+    /// for the relaxation is non-graphical Civil 3D styles only.
+    fn lenient(&self, child: Handle, owner: Handle) -> bool {
+        let entity = matches!(self.get(child), Some(Object::Entity { .. }));
+        !entity && (self.unmodelled(child) || self.unmodelled(owner))
+    }
+
     /// `child` (which exists) is listed by `owner` as `how`: its owner must
-    /// be `owner`.
+    /// be `owner` (a warning only as [`Self::lenient`] says).
     fn owned_by(&mut self, child: Handle, owner: Handle, how: &str) {
         let Some(obj) = self.get(child) else {
             return;
@@ -627,7 +676,11 @@ impl<'a> Validator<'a> {
                 self.name(child),
                 self.name(owner)
             );
-            self.error(Some(child), message);
+            if self.lenient(child, owner) {
+                self.warning(Some(child), message);
+            } else {
+                self.error(Some(child), message);
+            }
         }
     }
 
@@ -656,7 +709,16 @@ impl<'a> Validator<'a> {
                                 self.name(h),
                                 self.name(owner)
                             );
-                            self.error(Some(h), message);
+                            // A dictionary's entries are soft owner
+                            // references: AutoCAD's own files have objects
+                            // their owner dictionary does not list
+                            // (`adsk-py-01`, `asp-05`, `asp-10`). A raw
+                            // object's ownership is not modelled.
+                            if is_dictionary(o) || self.lenient(h, owner) {
+                                self.warning(Some(h), message);
+                            } else {
+                                self.error(Some(h), message);
+                            }
                         }
                     }
                 }
@@ -937,6 +999,29 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// An xref or overlay block record owns no entity: they are in the
+    /// referenced file, and R2018 stores no entity list for it.
+    fn xref_blocks(&mut self) {
+        for (h, obj) in self.objects() {
+            if let Object::Other {
+                object: NonGraphical::BlockRecord(b),
+                ..
+            } = obj
+            {
+                self.work += 1;
+                let owns = matches!(&b.entities, EntityList::Owned(v) if !v.is_empty());
+                if (b.is_xref || b.xref_overlaid) && owns {
+                    let message = format!(
+                        "{}: an xref or overlay block cannot own entities (they are in the \
+                         referenced file)",
+                        self.name(h)
+                    );
+                    self.error(Some(h), message);
+                }
+            }
+        }
+    }
+
     /// The nine tables, their required records, and unique record names.
     fn tables(&mut self) {
         let mut names: HashMap<TableKind, HashMap<String, Vec<Handle>>> = HashMap::new();
@@ -993,7 +1078,12 @@ impl<'a> Validator<'a> {
                 // AutoCAD writes anonymous and extra layout blocks under
                 // repeated names (`*U`, `*D`, `*T`, `*Paper_Space`; every
                 // corpus file) and numbers them on load.
-                if records.len() < 2 || kind == TableKind::Block && name.starts_with('*') {
+                // AutoCAD writes one `*Active` VPORT per tiled viewport of
+                // the model space configuration (`rc-02`: four).
+                if records.len() < 2
+                    || kind == TableKind::Block && name.starts_with('*')
+                    || kind == TableKind::Vport && name == "*active"
+                {
                     continue;
                 }
                 for (i, &r) in records.iter().enumerate() {
@@ -1371,7 +1461,8 @@ mod tests {
     /// Table entries and hard-owner dictionary entries are owned by their
     /// lister; a soft-owner dictionary's entries need not be. An owner that
     /// does not exist is a warning (the owner is a soft pointer); one that
-    /// does not list the object an error.
+    /// does not list the object an error, but a dictionary (its entries are
+    /// soft owner references; AutoCAD's own files have unlisted objects).
     #[test]
     fn listed_entries_are_owned_by_their_lister() {
         let app = |h: u64, owner: u64| {
@@ -1401,22 +1492,27 @@ mod tests {
             dictionary(0x23, 0x24, 0, &[]),
             dictionary(0x24, 0, 0, &[0x23]),
             dictionary(0x25, 0x99, 0, &[]),
+            dictionary(0x26, 0x11, 0, &[]),
         ]);
         let diags = d.validate();
         assert_eq!(
             on(&diags, 0x11, Severity::Error),
-            [
-                "APPID 11: its owner DICTIONARY 20 does not list it",
-                "APPID 11: owned by APPID_CONTROL 10 (a table entry), but its owner is 20"
-            ]
+            ["APPID 11: owned by APPID_CONTROL 10 (a table entry), but its owner is 20"]
+        );
+        assert_eq!(
+            on(&diags, 0x11, Severity::Warning),
+            ["APPID 11: its owner DICTIONARY 20 does not list it"]
         );
         assert_eq!(
             on(&diags, 0x21, Severity::Error),
             [
-                "DICTIONARY 21: its owner DICTIONARY 22 does not list it",
                 "DICTIONARY 21: owned by DICTIONARY 20 (a hard-owner dictionary entry), but \
                  its owner is 22"
             ]
+        );
+        assert_eq!(
+            on(&diags, 0x21, Severity::Warning),
+            ["DICTIONARY 21: its owner DICTIONARY 22 does not list it"]
         );
         // Listed by a soft-owner dictionary that is not its owner: fine.
         assert!(on(&diags, 0x23, Severity::Error).is_empty(), "{diags:#?}");
@@ -1424,6 +1520,127 @@ mod tests {
         assert_eq!(
             on(&diags, 0x25, Severity::Warning),
             ["DICTIONARY 25: its owner 99 does not exist"]
+        );
+        // An owner that is not a dictionary must list what it owns.
+        assert_eq!(
+            on(&diags, 0x26, Severity::Error),
+            ["DICTIONARY 26: its owner APPID 11 does not list it"]
+        );
+    }
+
+    fn raw(h: u64, owner: u64, refs: &[(u8, u64)]) -> (Handle, Object) {
+        use crate::handle::HandleRef;
+        use crate::object::RawObject;
+        other(
+            h,
+            owner,
+            NonGraphical::Unknown(RawObject {
+                type_code: 500,
+                class_name: Some("AECC_LABEL_TEXT_STYLE".into()),
+                source_version: crate::version::Version::R2018,
+                data: Vec::new(),
+                data_bits: 0,
+                strings: None,
+                handles: refs
+                    .iter()
+                    .map(|&(code, value)| HandleRef { code, value })
+                    .collect(),
+                tail_handles_raw: Vec::new(),
+                tail_handle_bits: 0,
+            }),
+        )
+    }
+
+    /// The ownership of raw objects (classes the library does not model) is
+    /// not known: Civil 3D's AECC styles name, as hard owner references,
+    /// styles another style owns and does not list (`camber-01`). Both
+    /// findings are warnings; a hard owner reference to nothing is still an
+    /// error.
+    #[test]
+    fn raw_object_ownership_is_a_warning() {
+        let d = drawing([
+            raw(0x30, 0, &[(HARD_OWNER, 0x32)]),
+            raw(0x31, 0, &[]),
+            raw(0x32, 0x31, &[]),
+            raw(0x33, 0, &[(HARD_OWNER, 0x99)]),
+        ]);
+        // The class is missing too: only the reference findings matter.
+        let diags: Vec<Diagnostic> = d
+            .validate()
+            .into_iter()
+            .filter(|x| !x.message.contains("no class"))
+            .collect();
+        assert!(on(&diags, 0x32, Severity::Error).is_empty(), "{diags:#?}");
+        assert_eq!(on(&diags, 0x32, Severity::Warning).len(), 2, "{diags:#?}");
+        assert_eq!(on(&diags, 0x33, Severity::Error).len(), 1, "{diags:#?}");
+    }
+
+    /// An XRECORD's hard references are application data: one naming
+    /// nothing is a warning (AutoCAD keeps stale ones: `adsk-cab-04`).
+    #[test]
+    fn dangling_xrecord_item_is_a_warning() {
+        use crate::object::{XRecord, XRecordValue};
+        let d = drawing([other(
+            0x40,
+            0,
+            NonGraphical::XRecord(XRecord {
+                items: vec![(340, XRecordValue::ObjectId(Handle(0x99)))],
+                ..XRecord::default()
+            }),
+        )]);
+        let diags = d.validate();
+        assert!(on(&diags, 0x40, Severity::Error).is_empty(), "{diags:#?}");
+        assert_eq!(
+            on(&diags, 0x40, Severity::Warning),
+            ["XRECORD 40: its hard pointer reference to 99 names an object that does not exist"]
+        );
+    }
+
+    /// AutoCAD writes one VPORT `*Active` per tiled model space viewport
+    /// (`rc-02`: four); other repeated VPORT names are still errors.
+    #[test]
+    fn repeated_active_vports_are_allowed() {
+        let named = |name: &str| {
+            let mut d = Drawing::new();
+            let control = d.header.vport_control;
+            let (&active, vport) = d
+                .objects
+                .iter()
+                .find(|(_, o)| o.type_name() == "VPORT")
+                .unwrap();
+            let mut twin = vport.clone();
+            let h = Handle(d.header.handseed.0);
+            d.header.handseed = Handle(h.0 + 1);
+            twin.object_common_mut().handle = h;
+            for v in [&mut twin, d.objects.get_mut(&active).unwrap()] {
+                if let Object::Other {
+                    object: NonGraphical::Vport(p),
+                    ..
+                } = v
+                {
+                    p.entry.name = name.into();
+                }
+            }
+            d.objects.insert(h, twin);
+            if let Some(Object::Other {
+                object: NonGraphical::TableControl(c),
+                ..
+            }) = d.objects.get_mut(&control)
+            {
+                c.entries.push(h);
+            }
+            d.validate()
+        };
+        let diags = named("*Active");
+        assert!(diags.is_empty(), "{diags:#?}");
+        let diags = named("Mine");
+        assert_eq!(
+            diags
+                .iter()
+                .filter(|x| x.severity == Severity::Error && x.message.contains("same name"))
+                .count(),
+            2,
+            "{diags:#?}"
         );
     }
 

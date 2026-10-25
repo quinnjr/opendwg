@@ -209,12 +209,7 @@ impl Decoder<'_> {
             return Err(corrupt("back-reference before start of output"));
         }
         self.room(len)?;
-        // Overlapping copies (len > dist) repeat the pattern, so go byte by byte.
-        let start = self.out.len() - dist;
-        for i in 0..len {
-            let b = self.out[start + i];
-            self.out.push(b);
-        }
+        super::copy_back(&mut self.out, dist, len);
         Ok(())
     }
 

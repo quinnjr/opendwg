@@ -230,6 +230,13 @@ mod r2010_defaults {
 }
 
 impl LegacyTableStyle {
+    /// Whether [`LegacyTableStyle::to_r2010`] converts the style: the
+    /// suppress-title and suppress-header flags have no known R2010 field,
+    /// so a style with either set does not convert.
+    pub fn is_convertible(&self) -> bool {
+        !(self.suppress_title || self.suppress_header)
+    }
+
     /// The R2010 form of the style, as AutoCAD converts it: a "Table" cell
     /// style (id 4) and the title (1), header (2) and data (3) cell styles
     /// that pre-R2010 files keep in their CELLSTYLEMAP, built from the row
@@ -245,15 +252,15 @@ impl LegacyTableStyle {
     /// right becomes edges 1, 0x20, 4, 8, 0x10, 2 in edge order). The flags
     /// (DXF 71) go to the first unknown `BL` (0 for both in the corpus).
     /// The constants in `r2010_defaults` fill the rest; they are checked
-    /// against the corpus only for its "Standard" style, so Task 26's
-    /// oracle is to confirm them.
+    /// against the corpus only for its "Standard" style; they are
+    /// unconfirmed against AutoCAD.
     ///
     /// The margin spacing (horizontal and vertical) and the "Table" cell
     /// style's text height are both 0.18 in the corpus's "Standard" style,
     /// which cannot tell them apart from the data row's text height (also
     /// 0.18). Both are taken from the data row's text height, the one
     /// legacy field they could plausibly follow; a style with another
-    /// height is unverified until Task 26's oracle.
+    /// height is unconfirmed against AutoCAD.
     ///
     /// The suppress-title and suppress-header flags have no known R2010
     /// field: a style with either set is an error (see
@@ -261,7 +268,7 @@ impl LegacyTableStyle {
     /// off is not kept (it has no effect).
     pub fn to_r2010(&self) -> Result<CellTableStyle> {
         use r2010_defaults::*;
-        if self.suppress_title || self.suppress_header {
+        if !self.is_convertible() {
             return Err(encode_err(
                 "a pre-R2010 table style with a suppressed title or header has no known R2010 form",
             ));
@@ -650,7 +657,7 @@ impl TableStyle {
     pub fn is_convertible(&self) -> bool {
         match self {
             TableStyle::Cells(_) => true,
-            TableStyle::Legacy(l) => l.to_r2010().is_ok(),
+            TableStyle::Legacy(l) => l.is_convertible(),
         }
     }
 
@@ -842,6 +849,26 @@ pub(crate) mod tests {
             assert_eq!(t, legacy_table_style(), "{v:?}");
             assert!(!t.is_convertible());
             assert!(t.encode(&mut ObjWriter::new(H)).is_err());
+        }
+    }
+
+    /// `is_convertible` tests the suppress flags directly; it agrees with
+    /// whether the conversion succeeds for every combination.
+    #[test]
+    fn legacy_convertible_matches_the_conversion() {
+        let TableStyle::Legacy(base) = legacy_table_style() else {
+            unreachable!()
+        };
+        for title in [false, true] {
+            for header in [false, true] {
+                let mut l = base.clone();
+                l.suppress_title = title;
+                l.suppress_header = header;
+                let t = TableStyle::Legacy(l.clone());
+                assert_eq!(l.is_convertible(), l.to_r2010().is_ok(), "{title} {header}");
+                assert_eq!(t.is_convertible(), l.to_r2010().is_ok(), "{title} {header}");
+                assert_eq!(l.is_convertible(), !title && !header);
+            }
         }
     }
 

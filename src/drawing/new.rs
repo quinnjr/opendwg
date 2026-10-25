@@ -442,7 +442,7 @@ fn linetype(name: &str, description: &str) -> NonGraphical {
 
 /// A dimension style with the header's dimension variables (the template's
 /// `Standard` style and the header agree), text style `text_style`.
-fn dim_style(name: &str, h: &HeaderVars, text_style: Handle) -> DimStyle {
+pub(super) fn dim_style(name: &str, h: &HeaderVars, text_style: Handle) -> DimStyle {
     DimStyle {
         entry: entry(name),
         dimpost: h.dimpost.clone(),
@@ -955,6 +955,25 @@ fn visual_style((name, style_type, internal, overrides): VisualStyleRow) -> Visu
     }
 }
 
+/// The standard visual style named `name` (compared without case), as
+/// AutoCAD's default template has it; for any other name, the values of
+/// `2dWireframe` under that name.
+pub(super) fn standard_visual_style(name: &str) -> VisualStyle {
+    let row = VISUAL_STYLES
+        .iter()
+        .find(|r| r.0.eq_ignore_ascii_case(name))
+        .or_else(|| VISUAL_STYLES.iter().find(|r| r.0 == "2dWireframe"))
+        .expect("2dWireframe is a standard visual style");
+    let mut style = visual_style(*row);
+    style.name = name.into();
+    style
+}
+
+/// Whether `name` is one of the standard visual styles (without case).
+pub(super) fn is_standard_visual_style(name: &str) -> bool {
+    VISUAL_STYLES.iter().any(|r| r.0.eq_ignore_ascii_case(name))
+}
+
 /// The values most standard visual styles share, by property position
 /// (see [`VISUAL_STYLE_KINDS`]), each with its DXF 176 value.
 #[rustfmt::skip]
@@ -1219,6 +1238,7 @@ fn tile_record() -> NonGraphical {
         items: vec![(270, XRecordValue::Int16(1)), (271, XRecordValue::Int16(1))],
         cloning: 1,
         object_ids: Vec::new(),
+        handle_tail: Default::default(),
         read_version: AsRead::default(),
     })
 }

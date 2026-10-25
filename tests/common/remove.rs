@@ -1,6 +1,6 @@
 //! Removing a drawing's objects through the API: the unconvertible objects
-//! of an R2000/R2004 corpus file, so that the rest saves (Task 22's
-//! round-trip tests, shared with the Task 26 sign-off pack and oracle tests).
+//! of an R2000/R2004 corpus file, so that the rest saves (the round-trip
+//! tests, shared with the sign-off pack and the ODA converter tests).
 
 use std::collections::HashSet;
 
@@ -9,13 +9,30 @@ use opendwg::{Drawing, Error, Handle};
 
 /// Clear the references of `referrer` to `x` that keep `x` from being
 /// removed: extended data handles, an entity's material and color book, an
-/// XRECORD's handle items.
+/// XRECORD's handle items, a visual style (of a VPORT, a VIEW, a VIEWPORT or
+/// an entity).
 pub fn clear_references(d: &mut Drawing, referrer: Handle, x: Handle) {
     let obj = d.get_mut(referrer).unwrap();
     let ty = obj.type_name().into_owned();
     let (xdata, cleared) = match obj {
-        Object::Entity { common, .. } => {
+        Object::Entity { common, entity } => {
             let mut cleared = false;
+            if let opendwg::object::Entity::Viewport(v) = entity {
+                if v.visual_style == x {
+                    v.visual_style = Handle(0);
+                    cleared = true;
+                }
+            }
+            for vs in [
+                &mut common.full_visual_style,
+                &mut common.face_visual_style,
+                &mut common.edge_visual_style,
+            ] {
+                if *vs == Some(x) {
+                    *vs = None;
+                    cleared = true;
+                }
+            }
             if common.material == MaterialRef::Handle(x) {
                 common.material = MaterialRef::ByLayer;
                 cleared = true;
@@ -38,6 +55,22 @@ pub fn clear_references(d: &mut Drawing, referrer: Handle, x: Handle) {
                 }
             }
             (&mut common.xdata, cleared)
+        }
+        // A visual style removed (an R2007/R2010 one R2018 cannot hold):
+        // the views and viewports using it get none, AutoCAD's default.
+        Object::Other {
+            common,
+            object: NonGraphical::Vport(v),
+        } if v.visual_style == x => {
+            v.visual_style = Handle(0);
+            (&mut common.xdata, true)
+        }
+        Object::Other {
+            common,
+            object: NonGraphical::View(v),
+        } if v.visual_style == x => {
+            v.visual_style = Handle(0);
+            (&mut common.xdata, true)
         }
         Object::Other { common, .. } => (&mut common.xdata, false),
         other => panic!("{referrer}: {other:?}"),

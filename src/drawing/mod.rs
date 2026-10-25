@@ -32,6 +32,7 @@
 mod api;
 mod new;
 pub(crate) mod refs;
+mod repair;
 mod rewrite;
 mod validate;
 mod write;
@@ -227,7 +228,18 @@ impl Drawing {
     /// change through this method broke. The object's references are
     /// recomputed for [`Drawing::referrers`] at its next use.
     pub fn get_mut(&mut self, h: Handle) -> Option<&mut Object> {
-        self.ref_index.get_mut().mark_dirty(h);
+        // The circular insert check's cache: a block record's list, or an
+        // entity of its list, may change.
+        let block = match self.objects.get(&h) {
+            Some(Object::Entity { .. }) => self.owner_of(h),
+            Some(_) => Some(h),
+            None => None,
+        };
+        let state = self.ref_index.get_mut();
+        state.mark_dirty(h);
+        if let Some(block) = block {
+            state.forget_inserts(block);
+        }
         self.objects.get_mut(&h)
     }
 
@@ -1757,6 +1769,14 @@ mod tests {
         assert!(matches!(
             Drawing::from_bytes(b"AC1014\0\0\0\0"),
             Err(Error::UnsupportedVersion(_))
+        ));
+        // An ASCII DXF file named .dwg: not a DWG, refused cleanly.
+        let mut dxf =
+            b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n".to_vec();
+        dxf.extend(b"  0\r\nENDSEC\r\n  0\r\nEOF\r\n".repeat(64));
+        assert!(matches!(
+            Drawing::from_bytes(&dxf),
+            Err(Error::UnsupportedVersion(v)) if v.starts_with("  0")
         ));
     }
 }

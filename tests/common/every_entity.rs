@@ -1,6 +1,6 @@
 //! One entity of every kind the library models, added to a drawing through
-//! the public API (Task 24's `new_with_every_entity_kind`, shared with the
-//! Task 26 sign-off pack and oracle tests).
+//! the public API (`new_with_every_entity_kind`, shared with the sign-off
+//! pack and the ODA converter tests).
 
 use opendwg::bits::Color;
 use opendwg::object::{
@@ -568,6 +568,7 @@ pub fn with_every_entity(d: Drawing) -> (Drawing, EveryEntity) {
         rows: 3,
         column_spacing: 2.0,
         row_spacing: 1.0,
+        read_attrib_code: Default::default(),
     };
     d.add_insert_with_attribs(
         ms,

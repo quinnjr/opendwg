@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod every_entity;
+pub mod model;
 pub mod pack;
 pub mod remove;
 
@@ -30,6 +31,9 @@ pub struct Entry {
     pub version: String,
     pub features: Vec<String>,
     pub license_note: String,
+    /// The program that wrote the file (`corpus/extended.toml` only).
+    #[serde(default)]
+    pub producer: Option<String>,
     /// Expected values, e.g. `object_count`.
     #[serde(default)]
     pub expect: BTreeMap<String, toml::Value>,
@@ -59,6 +63,16 @@ pub fn load_manifest() -> Manifest {
         return Manifest { file: Vec::new() };
     };
     toml::from_str(&text).expect("corpus/manifest.toml parses")
+}
+
+/// The extended corpus manifest (`corpus/extended.toml`); an empty one (with
+/// a skip, see [`skip`]) when it is absent.
+pub fn load_extended() -> Manifest {
+    let Ok(text) = std::fs::read_to_string(corpus_dir().join("extended.toml")) else {
+        skip("corpus/extended.toml");
+        return Manifest { file: Vec::new() };
+    };
+    toml::from_str(&text).expect("corpus/extended.toml parses")
 }
 
 /// Path of a fetched corpus file, or `None` when `scripts/fetch-corpus.sh` has not been run.

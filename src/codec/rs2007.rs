@@ -308,6 +308,20 @@ pub fn decode(
     data_size_per_block: usize,
     factor: usize,
 ) -> Result<Vec<u8>> {
+    decode_first(src, block_count, data_size_per_block, factor, block_count)
+}
+
+/// [`decode`], correcting and returning only the first `wanted` codewords
+/// (at most `block_count`): a system page repeats its data, and only the
+/// first copy is used.
+pub(crate) fn decode_first(
+    src: &[u8],
+    block_count: usize,
+    data_size_per_block: usize,
+    factor: usize,
+    wanted: usize,
+) -> Result<Vec<u8>> {
+    let wanted = wanted.min(block_count);
     let k = data_size_per_block;
     let f = field_for(k)?;
     let roots = N - k;
@@ -324,9 +338,9 @@ pub fn decode(
         });
     }
 
-    let mut out = Vec::with_capacity(block_count * k);
+    let mut out = Vec::with_capacity(wanted * k);
     let mut cw = [0u8; N];
-    for i in 0..block_count {
+    for i in 0..wanted {
         if interleaved {
             for (j, b) in cw.iter_mut().enumerate() {
                 *b = src[j * block_count + i];
@@ -418,6 +432,20 @@ mod tests {
             let blocks: Vec<_> = data.chunks(k).map(|c| encode_block(c, k)).collect();
             assert_eq!(decode(&interleave(&blocks), 3, k, 3).unwrap(), data);
         }
+    }
+
+    /// Decoding the first codewords gives the first blocks' data, whatever
+    /// the later codewords hold (here: damaged beyond correction).
+    #[test]
+    fn decode_first_codewords_only() {
+        let k = 239;
+        let data = noise(3 * k, 5);
+        let mut blocks: Vec<_> = data.chunks(k).map(|c| encode_block(c, k)).collect();
+        damage(&mut blocks[2], 40, 9);
+        let src = interleave(&blocks);
+        assert!(decode(&src, 3, k, 3).is_err());
+        assert_eq!(decode_first(&src, 3, k, 3, 2).unwrap(), data[..2 * k]);
+        assert_eq!(decode_first(&src, 3, k, 3, 0).unwrap(), []);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Task 26: the ODA File Converter as an independent oracle. Every
+//! The ODA File Converter as an independent oracle. Every
 //! round-tripped corpus file and every drawing made from scratch (the
 //! sign-off pack, `tests/common/pack.rs`) is converted DWG -> DXF
 //! (AutoCAD 2018, audit on) by the converter; the test fails on any `.err`

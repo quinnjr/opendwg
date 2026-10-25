@@ -1,4 +1,4 @@
-//! Corpus checks of the polylines, vertices, splines and mlines (Task 15):
+//! Corpus checks of the polylines, vertices, splines and mlines:
 //! every entity of these types decodes typed, the counts match the manifest,
 //! R2018 entities re-encode bit for bit, older versions convert, and values
 //! that pin ODS deviations are asserted on real data.
@@ -16,7 +16,8 @@ use opendwg::object::{
 };
 use opendwg::{Drawing, Handle, Version};
 
-/// The Task 15 entity types, by type name, with their manifest count keys.
+/// The entity types checked here, by type name, with their manifest count
+/// keys.
 const TYPES: [(&str, &str); 12] = [
     ("LWPOLYLINE", "lwpolyline_count"),
     ("POLYLINE_2D", "polyline_2d_count"),

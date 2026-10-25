@@ -1,4 +1,4 @@
-//! Corpus checks of the non-graphical objects of Task 18 (dictionaries,
+//! Corpus checks of the non-graphical objects (dictionaries,
 //! extended records, layouts, styles, image definitions, scales, sort tables,
 //! spatial filters and indexes, ...): every object of these types decodes
 //! typed, the counts match the manifest, R2018 objects re-encode bit for bit,
@@ -19,7 +19,8 @@ use opendwg::object::{
 };
 use opendwg::{Drawing, Handle, Version};
 
-/// The Task 18 object types, by type name, with their manifest count keys.
+/// The object types checked here, by type name, with their manifest count
+/// keys.
 const TYPES: [(&str, &str); 21] = [
     ("DICTIONARY", "dictionary_count"),
     ("ACDBDICTIONARYWDFLT", "dictionary_with_default_count"),

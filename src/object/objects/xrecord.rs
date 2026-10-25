@@ -5,6 +5,7 @@ use crate::error::encode_error as encode_err;
 use crate::handle::{Handle, HandleRef};
 use crate::object::common::AsRead;
 use crate::object::entities::dim::{check_fits, count, write_count};
+use crate::object::raw::{HandleTail, trailing_refs};
 use crate::object::stream::{ObjReader, ObjWriter};
 use crate::strings;
 use crate::version::Version;
@@ -95,8 +96,10 @@ pub(crate) fn format_handle_text(h: Handle, like: &str) -> String {
     format!("{digits:0>width$}")
 }
 
-/// The value of one extended record item.
+/// The value of one extended record item. Non-exhaustive: more value
+/// forms may be added.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[allow(missing_docs)] // field by field, as ODS names them
 pub enum XRecordValue {
@@ -112,12 +115,18 @@ pub enum XRecordValue {
     HandleText(String),
     Binary(Vec<u8>),
     ObjectId(Handle),
+    /// R2007+ text (of a text or handle-text group code) that is not
+    /// UTF-16 (a lone surrogate, as Civil 3D writes in material records):
+    /// its UTF-16 units' bytes as stored, written back unchanged. The items
+    /// after it are read as usual.
+    RawText(Vec<u8>),
     /// The rest of the data bytes from the start of an item whose group
     /// code has no known type or whose value could not be read as its type,
     /// its group code included (or a lone trailing byte, with no room for a
     /// code). The pair's code is the code read (0 for a lone byte) and is
     /// not written again: it must match the bytes' first two. It can only
-    /// be the last item.
+    /// be the last item. Handles inside these bytes are not known: the
+    /// reference index, removals and handle rewrites do not see them.
     Unknown(Vec<u8>),
 }
 
@@ -136,6 +145,7 @@ impl XRecordValue {
             XRecordValue::HandleText(_) => T::HandleText,
             XRecordValue::Binary(_) => T::Binary,
             XRecordValue::ObjectId(_) => T::ObjectId,
+            XRecordValue::RawText(_) => T::Text,
             XRecordValue::Unknown(_) => return None,
         })
     }
@@ -153,6 +163,10 @@ pub struct XRecord {
     /// The object ids after the common references, kept as stored ("as many
     /// as you can read until you run out of data").
     pub object_ids: Vec<HandleRef>,
+    /// Handle stream bits after the last reference that do not parse as
+    /// one, kept as stored (see [`crate::object::HandleTail`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub handle_tail: HandleTail,
     /// The version the record was read from (see [`XRecord::is_convertible`]).
     #[cfg_attr(feature = "serde", serde(skip))]
     pub read_version: AsRead<Version>,
@@ -180,16 +194,22 @@ impl ItemReader<'_> {
         self.array().map(f64::from_le_bytes)
     }
 
-    /// A text value, and whether it decoded lossily.
-    fn text(&mut self) -> Option<(String, bool)> {
+    /// A text value, and whether it decoded lossily: `Err` with the bytes
+    /// for R2007+ text that is not UTF-16 (a lone surrogate), kept as
+    /// [`XRecordValue::RawText`]: unlike older text, which converts to
+    /// R2018 anyway, it can be written back unchanged.
+    fn text(&mut self) -> Option<std::result::Result<(String, bool), Vec<u8>>> {
         let n = usize::from(u16::from_le_bytes(self.array()?));
         if self.version >= Version::R2007 {
             let bytes = self.take(n.checked_mul(2)?)?;
-            Some(strings::decode_utf16le_checked(bytes))
+            Some(match strings::decode_utf16le_checked(bytes) {
+                (_, true) => Err(bytes.to_vec()),
+                text => Ok(text),
+            })
         } else {
             let codepage = self.array::<1>()?[0];
             let bytes = self.take(n)?;
-            Some(strings::decode_checked(u16::from(codepage), bytes))
+            Some(Ok(strings::decode_checked(u16::from(codepage), bytes)))
         }
     }
 
@@ -198,13 +218,12 @@ impl ItemReader<'_> {
     fn value(&mut self, t: GroupCodeType) -> Option<(XRecordValue, bool)> {
         use GroupCodeType as T;
         let v = match t {
-            T::Text => {
-                let (s, lossy) = self.text()?;
-                return Some((XRecordValue::Text(s), lossy));
-            }
-            T::HandleText => {
-                let (s, lossy) = self.text()?;
-                return Some((XRecordValue::HandleText(s), lossy));
+            T::Text | T::HandleText => {
+                return Some(match self.text()? {
+                    Ok((s, lossy)) if t == T::Text => (XRecordValue::Text(s), lossy),
+                    Ok((s, lossy)) => (XRecordValue::HandleText(s), lossy),
+                    Err(bytes) => (XRecordValue::RawText(bytes), false),
+                });
             }
             T::Point => XRecordValue::Point([self.f64()?, self.f64()?, self.f64()?]),
             T::Real => XRecordValue::Real(self.f64()?),
@@ -274,8 +293,16 @@ fn items_bytes(items: &[(i16, XRecordValue)]) -> Result<Vec<u8>> {
         Ok(())
     };
     for (i, (code, value)) in items.iter().enumerate() {
+        let fits = |t| match value {
+            // Raw text is the value of either text type.
+            XRecordValue::RawText(_) => matches!(
+                group_code_type(*code),
+                Some(GroupCodeType::Text | GroupCodeType::HandleText)
+            ),
+            _ => group_code_type(*code) == Some(t),
+        };
         match value.type_of() {
-            Some(t) if group_code_type(*code) != Some(t) => {
+            Some(t) if !fits(t) => {
                 return Err(encode_err(format!(
                     "extended record group code {code} cannot hold a {t:?} value"
                 )));
@@ -303,6 +330,16 @@ fn items_bytes(items: &[(i16, XRecordValue)]) -> Result<Vec<u8>> {
         out.extend_from_slice(&code.to_le_bytes());
         match value {
             XRecordValue::Text(s) | XRecordValue::HandleText(s) => text(&mut out, s)?,
+            XRecordValue::RawText(b) => {
+                let n = u16::try_from(b.len() / 2)
+                    .ok()
+                    .filter(|_| b.len() % 2 == 0)
+                    .ok_or_else(|| {
+                        encode_err("extended record raw text is not whole UTF-16 units")
+                    })?;
+                out.extend_from_slice(&n.to_le_bytes());
+                out.extend_from_slice(b);
+            }
             XRecordValue::Point(p) => {
                 for c in p {
                     out.extend_from_slice(&c.to_le_bytes());
@@ -341,14 +378,12 @@ impl XRecord {
             });
         }
         let cloning = r.data.read_bs()?;
-        let mut object_ids = Vec::new();
-        while r.handles.remaining_bits() >= 8 {
-            object_ids.push(r.href()?);
-        }
+        let (object_ids, handle_tail) = trailing_refs(r)?;
         Ok(XRecord {
             items,
             cloning,
             object_ids,
+            handle_tail,
             read_version: AsRead::new(r.version),
         })
     }
@@ -378,7 +413,7 @@ impl XRecord {
         for &h in &self.object_ids {
             w.href(h)?;
         }
-        Ok(())
+        self.handle_tail.write(w)
     }
 }
 
@@ -523,6 +558,7 @@ pub(crate) mod tests {
             ],
             cloning: 1,
             object_ids: vec![],
+            handle_tail: HandleTail::default(),
             read_version: Default::default(),
         }
     }
@@ -556,7 +592,22 @@ pub(crate) mod tests {
         // Each case: the bytes and the items they parse to; written back,
         // the same bytes.
         type Items = Vec<(i16, XRecordValue)>;
-        let cases: [(&[u8], Items); 4] = [
+        let cases: [(&[u8], Items); 5] = [
+            // R2007+ text that is not UTF-16 (a lone surrogate), as Civil
+            // 3D's material records hold it (`camber-01` of the extended
+            // corpus): kept as its bytes, and the items after it read (an
+            // object id among them stays a reference).
+            (
+                &[
+                    0x2C, 0x01, 2, 0, 0x41, 0, 0x00, 0xD8, 0x46, 0x00, 5, 0, 0x4A, 0x01, 0x10, 0,
+                    0, 0, 0, 0, 0, 0,
+                ],
+                vec![
+                    (300, XRecordValue::RawText(vec![0x41, 0, 0x00, 0xD8])),
+                    (70, XRecordValue::Int16(5)),
+                    (330, XRecordValue::ObjectId(Handle(0x10))),
+                ],
+            ),
             // A Bool that is neither 0 nor 1.
             (
                 &[0x22, 0x01, 0x02, 0x46, 0x00, 0x05, 0x00],

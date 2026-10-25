@@ -109,8 +109,9 @@ impl Reader<'_> {
     }
 }
 
-fn copy_literals(r: &mut Reader, out: &mut Vec<u8>, n: usize, expected_len: usize) -> Result<()> {
-    if n > expected_len - out.len() {
+/// Copy `n` literal bytes to `out`, which may grow to `end` bytes.
+fn copy_literals(r: &mut Reader, out: &mut Vec<u8>, n: usize, end: usize) -> Result<()> {
+    if n > end - out.len() {
         return Err(corrupt("output exceeds expected length"));
     }
     let end = r.pos.checked_add(n).ok_or_else(truncated)?;
@@ -126,23 +127,36 @@ fn copy_literals(r: &mut Reader, out: &mut Vec<u8>, n: usize, expected_len: usiz
 /// `expected_len`), so callers must validate `expected_len` against the page header or the
 /// section's maximum page size before calling.
 pub fn decompress(src: &[u8], expected_len: usize) -> Result<Vec<u8>> {
-    let mut r = Reader { src, pos: 0 };
     // Reserve conservatively: `expected_len` comes from the file, the output grows with real data.
     let mut out = Vec::with_capacity(expected_len.min(src.len().saturating_mul(8)));
+    decompress_into(src, expected_len, &mut out)?;
+    Ok(out)
+}
+
+/// [`decompress`], appending the `expected_len` bytes to `out` (a section
+/// built page by page). Back-references reach only into this stream's
+/// output, not into what `out` held before. On error `out` may hold part of
+/// the output.
+pub(crate) fn decompress_into(src: &[u8], expected_len: usize, out: &mut Vec<u8>) -> Result<()> {
+    let mut r = Reader { src, pos: 0 };
+    let base = out.len();
+    let end = base
+        .checked_add(expected_len)
+        .ok_or_else(|| corrupt("output length overflow"))?;
 
     let mut opcode = r.byte()?;
     if opcode < 0x10 {
         let n = r.literal_length(opcode)?;
         if n == 4 && expected_len < 4 {
             // The padded first run `compress` writes for 1-3 byte inputs.
-            copy_literals(&mut r, &mut out, 4, 4)?;
-            out.truncate(expected_len);
+            copy_literals(&mut r, out, 4, base + 4)?;
+            out.truncate(end);
         } else {
-            copy_literals(&mut r, &mut out, n, expected_len)?;
+            copy_literals(&mut r, out, n, end)?;
         }
         match r.peek() {
             Some(_) => opcode = r.byte()?,
-            None if out.len() == expected_len => return Ok(out),
+            None if out.len() == end => return Ok(()),
             None => return Err(truncated()),
         }
     }
@@ -181,18 +195,13 @@ pub fn decompress(src: &[u8], expected_len: usize) -> Result<Vec<u8>> {
             }
         };
 
-        if dist > out.len() {
+        if dist > out.len() - base {
             return Err(corrupt("back-reference before start of output"));
         }
-        if len > expected_len - out.len() {
+        if len > end - out.len() {
             return Err(corrupt("output exceeds expected length"));
         }
-        // Overlapping copies (len > dist) repeat the pattern, so go byte by byte.
-        let start = out.len() - dist;
-        for i in 0..len {
-            let b = out[start + i];
-            out.push(b);
-        }
+        super::copy_back(out, dist, len);
 
         if lit == 0 {
             // A byte with a high nibble is already the next opcode (literal length 0).
@@ -204,17 +213,17 @@ pub fn decompress(src: &[u8], expected_len: usize) -> Result<Vec<u8>> {
                 _ => {}
             }
         }
-        copy_literals(&mut r, &mut out, lit, expected_len)?;
+        copy_literals(&mut r, out, lit, end)?;
 
         match r.peek() {
             Some(_) => opcode = r.byte()?,
-            None if out.len() == expected_len => return Ok(out),
+            None if out.len() == end => return Ok(()),
             None => return Err(truncated()),
         }
     }
 
-    if out.len() == expected_len {
-        Ok(out)
+    if out.len() == end {
+        Ok(())
     } else {
         Err(corrupt("stream ended before expected length"))
     }

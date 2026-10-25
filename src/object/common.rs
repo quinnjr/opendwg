@@ -572,6 +572,9 @@ fn read_reactors_xdict(r: &mut ObjReader) -> Result<(Vec<Handle>, Option<Handle>
         .map(|_| r.href_abs())
         .collect::<Result<Vec<_>>>()?;
     let xdict_missing = r.version >= Version::R2004 && r.data.read_b()?;
+    // A clear flag with a null handle reads as no extension dictionary and
+    // is written with the flag set: a non-canonical round trip (see
+    // `crate::object`).
     let xdict = if xdict_missing {
         None
     } else {
@@ -734,6 +737,13 @@ fn read_xdata_string(r: &mut ObjReader, b: &mut Bytes) -> Result<String> {
     } else {
         let n = usize::from(b.u16()?);
         let codepage = u16::from(b.u8()?);
+        // The ODA SDK (`cc-15`, `cc-21`) and the writer of civilcraft's
+        // R2000 fixtures (`cc-02`, `cc-04`, ...) store code page 0 where
+        // AutoCAD stores the drawing's (30 in every AutoCAD R2000/R2004
+        // corpus file): 382 strings, all ASCII ("AcDbSavedByObjectVersion",
+        // "... Data", "DSTYLE"), whose lengths and following items read
+        // right. Off-spec but harmless for ASCII: read as Windows-1252, with
+        // the warning.
         if !strings::is_supported(codepage) {
             r.diagnostics.push(Diagnostic {
                 severity: Severity::Warning,

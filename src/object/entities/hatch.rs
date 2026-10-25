@@ -28,10 +28,12 @@
 //! BD, an unknown BS, a BL RGB and an ignored RC; the corpus stores BS 0
 //! and CMC true colors), as ACadSharp `readHatch` reads it.
 //!
-//! Unconfirmed by the corpus, which has line edges and polyline paths only:
-//! circular, elliptic and spline edges. They follow ODS; for R2010+ spline
-//! fit data ODS stores the start and end tangents always, ACadSharp only
-//! after a non-zero fit point count, and ODS is followed.
+//! R2010+ spline edge fit data: ODS stores the start and end tangents
+//! always, ACadSharp only after a non-zero fit point count; AutoCAD 2025's
+//! spline edge without fit points in ACadSharp's `svg/export_sample.dwg`
+//! (`acadsharp-svg-export-sample` of the extended corpus) has none, so
+//! ACadSharp is followed. Unconfirmed by the corpus: circular and elliptic
+//! edges, and spline edges with fit points; they follow ODS.
 
 use crate::error::encode_error as encode_err;
 use std::borrow::Cow;
@@ -194,7 +196,8 @@ pub struct HatchSpline {
     pub control_points: Vec<([f64; 2], f64)>,
     /// R2010+ fit points (DXF 11); empty before.
     pub fit_points: Vec<[f64; 2]>,
-    /// R2010+ start and end tangents (DXF 12, 13); zero before.
+    /// R2010+ start and end tangents (DXF 12, 13), stored only with fit
+    /// points; zero otherwise.
     pub start_tangent: [f64; 2],
     pub end_tangent: [f64; 2],
 }
@@ -460,7 +463,11 @@ impl HatchSpline {
             .collect::<Result<_>>()?;
         let (fit_points, start_tangent, end_tangent) = if r.version >= Version::R2010 {
             let fit = read_2rd_list(r, "spline edge fit points")?;
-            (fit, r.data.read_2rd()?, r.data.read_2rd()?)
+            if fit.is_empty() {
+                (fit, [0.0; 2], [0.0; 2])
+            } else {
+                (fit, r.data.read_2rd()?, r.data.read_2rd()?)
+            }
         } else {
             (Vec::new(), [0.0; 2], [0.0; 2])
         };
@@ -498,8 +505,10 @@ impl HatchSpline {
             }
         }
         write_2rd_list(w, &self.fit_points, "spline edge fit points")?;
-        w.data.write_2rd(self.start_tangent);
-        w.data.write_2rd(self.end_tangent);
+        if !self.fit_points.is_empty() {
+            w.data.write_2rd(self.start_tangent);
+            w.data.write_2rd(self.end_tangent);
+        }
         Ok(())
     }
 }
@@ -915,6 +924,37 @@ pub(crate) mod tests {
         let bytes = w.finish(type_code::HATCH).unwrap();
         let mut r = reader(&bytes);
         Hatch::decode(&mut r).unwrap()
+    }
+
+    /// An R2010+ spline edge stores its start and end tangents only after
+    /// fit points (AutoCAD 2025's `export_sample.dwg`, as ACadSharp reads
+    /// them; ODS: always). Without fit points they are not written.
+    #[test]
+    fn spline_tangents_only_with_fit_points() {
+        let without = |tangent: [f64; 2]| {
+            let mut h = hatch();
+            let PathEdges::Edges(edges) = &mut h.paths[0].edges else {
+                unreachable!()
+            };
+            let HatchEdge::Spline(s) = &mut edges[3] else {
+                unreachable!()
+            };
+            s.fit_points.clear();
+            s.start_tangent = tangent;
+            s.end_tangent = tangent;
+            h
+        };
+        let zero = without([0.0; 2]);
+        assert_eq!(reread(&zero), zero);
+        let stale = without([1.0, 2.0]);
+        let bytes = |h: &Hatch| {
+            let mut w = ObjWriter::new(Handle(0x80));
+            h.encode(&mut w).unwrap();
+            w.finish(type_code::HATCH).unwrap()
+        };
+        assert_eq!(bytes(&stale), bytes(&zero));
+        // With fit points they are kept.
+        assert_eq!(reread(&hatch()), hatch());
     }
 
     /// The format's flags are written from the data: a path's polyline bit

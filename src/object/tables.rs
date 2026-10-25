@@ -277,9 +277,9 @@ impl TableEntry {
 
     /// Whether R2018 can store the xref index: its one `BS` keeps bit 0x100
     /// for the dependent flag, so an index (read from a pre-R2007 file) with
-    /// that bit set, including any negative one, has no R2018 form.
-    /// [`super::encode_object`] refuses such an entry with
-    /// [`Error::UnconvertibleObjects`].
+    /// that bit set has no R2018 form; only that bit matters. Saving a
+    /// drawing with such an entry fails with [`Error::UnconvertibleObjects`],
+    /// and [`super::encode_object`] fails to encode it.
     pub fn is_convertible(&self) -> bool {
         self.xref_index & XREF_DEPENDENT == 0
     }
@@ -366,7 +366,11 @@ impl BlockRecord {
         let is_xref = r.data.read_b()?;
         let xref_overlaid = r.data.read_b()?;
         let xref_unloaded = r.data.read_b()?;
-        let owned_count = if v >= Version::R2004 {
+        // An xref block owns no entities: from R2004 it stores no owned
+        // object count (ODS has the count always; ACadSharp's
+        // `readBlockHeader` and Civil 3D's xref block in `camber-26` agree).
+        let xref = is_xref || xref_overlaid;
+        let owned_count = if v >= Version::R2004 && !xref {
             Some(r.data.read_bl()?)
         } else {
             None
@@ -399,7 +403,7 @@ impl BlockRecord {
                 let n = handle_count(r, n, "owned entity")?;
                 EntityList::Owned((0..n).map(|_| r.href_abs()).collect::<Result<_>>()?)
             }
-            None if is_xref || xref_overlaid => EntityList::Owned(Vec::new()),
+            None if xref => EntityList::Owned(Vec::new()),
             None => EntityList::Linked {
                 first: r.href_abs()?,
                 last: r.href_abs()?,
@@ -441,14 +445,20 @@ impl BlockRecord {
                 "an R2000 block record's first/last entities must be converted to a list",
             ));
         };
+        let xref = self.is_xref || self.xref_overlaid;
+        if xref && !owned.is_empty() {
+            return Err(encode_err("an xref block record cannot own entities"));
+        }
         self.entry.encode(w)?;
         w.data.write_b(self.anonymous);
         w.data.write_b(self.has_attdefs);
         w.data.write_b(self.is_xref);
         w.data.write_b(self.xref_overlaid);
         w.data.write_b(self.xref_unloaded);
-        w.data
-            .write_bl(encode_count(owned.len(), "owned entities")?);
+        if !xref {
+            w.data
+                .write_bl(encode_count(owned.len(), "owned entities")?);
+        }
         w.data.write_3bd(self.base_point);
         w.text(&self.xref_path)?;
         for _ in &self.inserts {
@@ -965,7 +975,9 @@ pub struct View {
     pub visual_style: Handle,
     /// R2007+ sun (hard owner).
     pub sun: Handle,
+    /// The UCS's base UCS (hard pointer): stored only with a `ucs`.
     pub base_ucs: Handle,
+    /// The named UCS (hard pointer): stored only with a `ucs`.
     pub named_ucs: Handle,
     /// R2007+ live section (soft pointer).
     pub live_section: Handle,
@@ -999,8 +1011,13 @@ impl View {
         } else {
             (Handle(0), Handle(0), Handle(0))
         };
-        let base_ucs = r.href_abs()?;
-        let named_ucs = r.href_abs()?;
+        // Only a view with a UCS stores the UCS handles (ODS 20.4.60;
+        // AutoCAD 2025's views without one in `adsk-house-01`).
+        let (base_ucs, named_ucs) = if ucs.is_some() {
+            (r.href_abs()?, r.href_abs()?)
+        } else {
+            (Handle(0), Handle(0))
+        };
         let live_section = if r2007 { r.href_abs()? } else { Handle(0) };
         Ok(View {
             entry,
@@ -1051,8 +1068,10 @@ impl View {
         put(w, SOFT_POINTER, self.background)?;
         put(w, HARD_POINTER, self.visual_style)?;
         put(w, HARD_OWNER, self.sun)?;
-        put(w, HARD_POINTER, self.base_ucs)?;
-        put(w, HARD_POINTER, self.named_ucs)?;
+        if self.ucs.is_some() {
+            put(w, HARD_POINTER, self.base_ucs)?;
+            put(w, HARD_POINTER, self.named_ucs)?;
+        }
         put(w, SOFT_POINTER, self.live_section)
     }
 }
@@ -1924,7 +1943,7 @@ mod tests {
             anonymous: true,
             has_attdefs: true,
             is_xref: false,
-            xref_overlaid: true,
+            xref_overlaid: false,
             xref_unloaded: true,
             base_point: [1.0, -2.5, 3.0],
             xref_path: "C:\\x.dwg".into(),
@@ -2011,6 +2030,71 @@ mod tests {
             assert_eq!(r.data.remaining_bits(), 0);
             assert!(r.handles.remaining_bits() < 8);
         }
+    }
+
+    /// From R2004 a BLOCK_HEADER stores its owned object count and owned
+    /// entities, but an xref or overlaid xref block stores neither (Civil 3D
+    /// 2023's xref block `Xref01` in `camber-26` of the extended corpus).
+    #[test]
+    fn r2004_xref_block_record_has_no_owned_count() {
+        for (xref, overlaid) in [(false, false), (true, false), (false, true)] {
+            let mut d = BitWriter::new();
+            d.write_tv_raw(b"B").unwrap();
+            d.write_b(true); // 64-flag
+            d.write_bs(0);
+            d.write_b(false);
+            for bit in [false, false, xref, overlaid, false] {
+                d.write_b(bit);
+            }
+            let plain = !xref && !overlaid;
+            if plain {
+                d.write_bl(2);
+            }
+            d.write_3bd([0.0; 3]);
+            d.write_tv_raw(b"x.dwg").unwrap();
+            d.write_rc(1); // one insert
+            d.write_rc(0);
+            d.write_tv_raw(b"").unwrap();
+            d.write_bl(0); // preview
+            let mut hs = BitWriter::new();
+            let mut refs = vec![(5, 0), (3, 0x20)];
+            if plain {
+                refs.extend([(3, 0x30), (3, 0x34)]);
+            }
+            refs.extend([(3, 0x21), (4, 0x99), (5, 0x22)]);
+            for (code, value) in refs {
+                hs.write_handle_ref(HandleRef { code, value }).unwrap();
+            }
+            let bytes = assemble(Version::R2004, type_code::BLOCK_HEADER, &d, None, &hs);
+            let (mut r, _) = ObjReader::split(&bytes, Version::R2004, 30).unwrap();
+            let b = BlockRecord::decode(&mut r).unwrap();
+            let want: &[Handle] = if plain {
+                &[Handle(0x30), Handle(0x34)]
+            } else {
+                &[]
+            };
+            assert_eq!(b.entities, EntityList::Owned(want.to_vec()));
+            assert_eq!((b.is_xref, b.xref_overlaid), (xref, overlaid));
+            assert_eq!(b.xref_path, "x.dwg");
+            assert_eq!(b.end_block, Handle(0x21));
+            assert_eq!(b.inserts, [Handle(0x99)]);
+            assert_eq!(b.layout, Handle(0x22));
+            assert_eq!(r.data.remaining_bits(), 0);
+            assert!(r.handles.remaining_bits() < 8);
+            // Written as R2018 and read back, the same.
+            roundtrip(
+                &b,
+                BlockRecord::encode,
+                BlockRecord::decode,
+                type_code::BLOCK_HEADER,
+            );
+        }
+        // An xref block cannot own entities.
+        let b = BlockRecord {
+            is_xref: true,
+            ..block_record()
+        };
+        assert!(b.encode(&mut ObjWriter::new(H)).is_err());
     }
 
     fn layer() -> Layer {
@@ -2265,8 +2349,23 @@ mod tests {
             live_section: Handle(0x74),
         };
         roundtrip(&v, View::encode, View::decode, type_code::VIEW);
-        let no_ucs = View { ucs: None, ..v };
+        // Without a UCS the UCS handles are not stored (AutoCAD 2025's
+        // views in `adsk-house-01` of the extended corpus).
+        let no_ucs = View {
+            ucs: None,
+            base_ucs: Handle(0),
+            named_ucs: Handle(0),
+            ..v
+        };
         roundtrip(&no_ucs, View::encode, View::decode, type_code::VIEW);
+        let stale = View {
+            base_ucs: Handle(0x72),
+            ..no_ucs.clone()
+        };
+        assert_eq!(
+            encoded(&stale, View::encode, type_code::VIEW),
+            encoded(&no_ucs, View::encode, type_code::VIEW)
+        );
     }
 
     #[test]

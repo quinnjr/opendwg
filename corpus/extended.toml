@@ -1,0 +1,1227 @@
+# Extended public corpus: real-world drawings from many producers (AutoCAD, Civil 3D, BricsCAD,
+# ODA/Teigha, SolidWorks, acadrust, civilcraft's own writer), and negative cases. The files are NOT
+# in the repository: scripts/fetch-corpus.sh downloads them into corpus/files/<name>.dwg and checks
+# their sha256. Keep one `key = "value"` or `key = [..]` per line: the script parses this with awk.
+# Same per-file schema as manifest.toml, plus `producer` (the writer, from the file's AppInfo or
+# its source). `expect` is optional:
+# - `expect.open = "unsupported"`: not a version the crate reads (pre-R2000, or not a DWG); opening
+#   must fail with Error::UnsupportedVersion. `version` is then the file's first 6 bytes as found.
+# - `expect.unconvertible = true`: the file holds objects R2018 cannot store, so a save must fail
+#   with Error::UnconvertibleObjects.
+# Feature tags were computed with the library from the decoded drawings (see corpus/README.md).
+# Research ids (camber-01, cc-12, ...) are kept as names so findings and commits can cite them.
+
+[[file]]
+name = "camber-01"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Alignment/AlignmentCreationTests.dwg"
+sha256 = "1861943088049b93164149c49b112a1f568b7980d8c044972031ac6d55e5cd5c"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-02"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Alignment/AlignmentTests.dwg"
+sha256 = "db48168112adefa36aac02987c98c953257ae5a80f6dc880863e15b178911c61"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-03"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/CodeSetStyles/CodeSetStyleTests.dwg"
+sha256 = "01903bb428ccd85dbff5b035065fabe23d6b01cbf33526ddcc6ee713d35594be"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-04"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/DisplayStyles/DisplayStyleTests.dwg"
+sha256 = "90d2bce6de1550b3e632276343e285a89cc1223c1ee1f8f6bf1c507da586f1e0"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-05"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Document/DocumentSettingsTests.dwg"
+sha256 = "1511948e0743f13e0b23cca5be7a48c8dd95ad73fed792eef682d29fcd251440"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-06"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/ExternalBlockReference/ExternalBlockReferenceTests.dwg"
+sha256 = "7b0706288673ed0c42d8a2dcb909f4a5e7f6e88d254f51351ed6a80f545d3637"
+version = "AC1032"
+features = ["attributes","custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-07"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/ExternalDBPoint/ExternalDBPointTests.dwg"
+sha256 = "87a9bdb35867cc855ac99065c2d5c3b5d470bdf6f58268485546300b10d8696f"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-08"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/ExternalDocument/ExternalDocumentTests.dwg"
+sha256 = "37944621cc75af377390d2612c9a4852a41b8a009e29a7c9bf6a6b0cd4db1b1e"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-09"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/ExternalLayout/ExternalLayoutTests.dwg"
+sha256 = "6b7379f2dcfff1a02136b797bb0cac36918266fe622efa6348e287b3f1e47c20"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-10"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/ExternalMText/ExternalMTextTests.dwg"
+sha256 = "3756fd0cb41c6456fa5a3031a88e8d7937507b2262cb2e86f8213a1743e33e9d"
+version = "AC1032"
+features = ["custom_objects","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-11"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Fields/FieldTests.dwg"
+sha256 = "01ee7784b77c3751c6281fd7d145fb6fb1d91818d9045de18319a3219bd5c27a"
+version = "AC1032"
+features = ["custom_objects","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-12"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/GridSurface/GridSurfaceTests.dwg"
+sha256 = "7f537e212f7bff1d8aede1a6d1bbe7e9c5c92b627a7b66871e7b6a5f16dba0c8"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-13"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/LandXML/LandXML_Export.dwg"
+sha256 = "36aafc77a202688496aea741afad819c9c0bbc211d0774c21311749e88a8fa4f"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-14"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/LandXML/LandXML_Import.dwg"
+sha256 = "eece93bb065002f24cf260eecd2d5eb8b9844149e7cef788e770b145df9b9d45"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-15"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Layouts/LayoutTests.dwg"
+sha256 = "6c81b2f7af1ea45f4d680cd8ead685c425915186dd64fca6f82bd6f4df7f199b"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-16"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/MText/MTextTests.dwg"
+sha256 = "7f91c557b929a0edca8dbcab583f55784fb36524d48afb8d27a1a5b8ff115863"
+version = "AC1032"
+features = ["custom_objects","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-17"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/MVBlocks/MVBlockTests.dwg"
+sha256 = "5b7bf95139b5e847b437757f11c591152d97757c61a10add4bcd4f0c72850044"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-18"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Parcels/ParcelsTest.dwg"
+sha256 = "a8c21b7bbfbf02af596db2b37a2750825c01e86b37a407d8493e15012e7b52b6"
+version = "AC1032"
+features = ["custom_objects","hatch","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-19"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Pipe%20Networks/PipeNetwork_AddStructure.dwg"
+sha256 = "1cd9fc1753a1c699b0cb5e7b595a868d531ce5daba6752a65412d20f60c4e2e9"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-20"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Pipe%20Networks/PipeNetwork_ConnectStructureToPipe.dwg"
+sha256 = "ef4cfc0549e199df9314a258563166cd3583f732f432b93cfe3226f5a54f81c1"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-21"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Polylines/PolylineTests.dwg"
+sha256 = "fe5cc4548ee2387ef110632e4df0f8e3ba9178dc68f277e5baf16bc0349179c0"
+version = "AC1032"
+features = ["custom_objects","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-22"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Surface/BoundaryTests.dwg"
+sha256 = "a0aad167f7ea31fe8b48f6a55d048ed1de9ea7ce84046f4694f3ddc744ae9b89"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-23"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/TINVolumeSurface/TINVolumeSurfaceTests.dwg"
+sha256 = "3087e857726b838b2dcf189da6bf7fd600938df9e4acbab3f9bc514af842d327"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-24"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Xref/Xref01.dwg"
+sha256 = "e8c794b44ccaa6ae594a5fe704224ed3d8d421fa9681ac060983b7f0e24f21b6"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-25"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Xref/Xref02.dwg"
+sha256 = "e079b49fe17c6641f6f35b137d07a8d2dc93c6d7ff7b5f9bc56c4bbd5db4b856"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "camber-26"
+url = "https://raw.githubusercontent.com/mzjensen/Camber/edb69d2e76474536f7c51b5ad22be0536d1a005d/tests/Xref/XrefTests.dwg"
+sha256 = "05d1784ee7e004c2e65be80baae945eb9df1334a470694e42a8251c9193ae773"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics","xref"]
+producer = "Civil 3D 2023"
+license_note = "BSD-3-Clause (mzjensen/Camber, Copyright (c) 2022, Zachri Jensen); the LICENSE at the repository root, commit edb69d2e7647, covers tests/"
+
+[[file]]
+name = "c3dtk-01"
+url = "https://raw.githubusercontent.com/paoloemilioserra/Civil3dToolkit/d99689bcd954b84fc0d9e3c79c11bb60b2a1ffb1/Tests/Object%20By%20Handle/simple%20pipe-PropertSet%20imported%20from%20JSON.dwg"
+sha256 = "6711c17cac5d487e08354b88c281f21efe913f0febf87b6624be2baa5e7a7f63"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2020 (registry 23.1)"
+license_note = "Apache-2.0 (paoloemilioserra/Civil3dToolkit); the LICENSE at the repository root, commit d99689bcd954"
+
+[[file]]
+name = "rc-01"
+url = "https://media.githubusercontent.com/media/Railcomplete-AS/RailCOMPLETE-DNA-NO-BN/a7a7f2b32cfe8cc58089f2e3f7434107e0ae5c9d/NO-BN/2D/NO-BN-2026.1-2D.dwg"
+sha256 = "037d2a424a29e7b4ba1061a77b4aef72410bda85b2e8c5526331e6456478cb55"
+version = "AC1032"
+features = ["attributes","mtext","non_ascii","proxy_graphics"]
+producer = "AutoCAD 2024"
+license_note = "MIT (Railcomplete-AS/RailCOMPLETE-DNA-NO-BN, Copyright (c) 2015-2024 Railcomplete AS); the LICENSE at the repository root, commit a7a7f2b32cfe (Git LFS object)"
+
+[[file]]
+name = "rc-02"
+url = "https://media.githubusercontent.com/media/Railcomplete-AS/RailCOMPLETE-DNA-NO-BN/a7a7f2b32cfe8cc58089f2e3f7434107e0ae5c9d/NO-BN/3D/STD-2026.1/EH/NO-BN-3D-EH-MAS-GITTERMAST-B6-191x374xM36-8000.dwg"
+sha256 = "61f4347a6aece3f224f304d1045aa21d75edbf6c83e1ccc949b16b6cd81dec63"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD 2024"
+license_note = "MIT (Railcomplete-AS/RailCOMPLETE-DNA-NO-BN, Copyright (c) 2015-2024 Railcomplete AS); the LICENSE at the repository root, commit a7a7f2b32cfe (Git LFS object)"
+
+[[file]]
+name = "rc-03"
+url = "https://media.githubusercontent.com/media/Railcomplete-AS/RailCOMPLETE-DNA-NO-BN/a7a7f2b32cfe8cc58089f2e3f7434107e0ae5c9d/NO-BN/NationalTutorials/_SRC/001%20Alignment%20geometry%20-%20tangents%20and%20curves/WIP%20001%20EN%202025-10-15%20Alignment%20geometry%20-%20tangents%20and%20curves.dwg"
+sha256 = "90facf9ca2f814e1538de58f5529cc72a25c1c1c8de41dcaec85d2a970c997ba"
+version = "AC1032"
+features = ["custom_objects","mtext","non_ascii"]
+producer = "Civil 3D 2025"
+license_note = "MIT (Railcomplete-AS/RailCOMPLETE-DNA-NO-BN, Copyright (c) 2015-2024 Railcomplete AS); the LICENSE at the repository root, commit a7a7f2b32cfe (Git LFS object)"
+
+[[file]]
+name = "cc-01"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/dwg/base-plan.dwg"
+sha256 = "703d68ab6c182cb30e40215d6171df683aefb3cd3aa5412c68e7773ea523e21c"
+version = "AC1032"
+features = []
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-02"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/dwg/df1-ocs-blocks-r2000.dwg"
+sha256 = "7d64be3f1471661f3b4a14d5a4e0d31fa571eb02b3d5f4ddc2c6019042f02a61"
+version = "AC1015"
+features = ["custom_objects","dimension","hatch","mtext"]
+producer = "unknown (civilcraft fixture)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-03"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/dwg/df1-ocs-blocks.dwg"
+sha256 = "58bfd4c656ed566d853db47f356272e7bb32089e2056937760dd42213aff794e"
+version = "AC1032"
+features = ["dimension","hatch","mtext"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-04"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/dwg/kitchen-equipment-r2000.dwg"
+sha256 = "b22af9bea805ff9d368ab71e7d390166b006c864b9c80415ee09502fbbc7b3c4"
+version = "AC1015"
+features = ["attributes","custom_objects","dimension","hatch","image","mtext","proxy_graphics","xref"]
+producer = "unknown (civilcraft fixture)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-05"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/dwg/kitchen-equipment.dwg"
+sha256 = "091840a55018d97cb92c5534f8b46b91cd53f2441f1a43ded42daa0c47f904f1"
+version = "AC1032"
+features = ["attributes","dimension","hatch","image","mtext","proxy_graphics"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-06"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/electrical/electrical-sample.dwg"
+sha256 = "a954f373a4adc391e7adbdda45294c8b3a85b368aed87225a5bbb6187ecec5b8"
+version = "AC1032"
+features = ["attributes","hatch","non_ascii"]
+producer = "civilcraft's own JS writer"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-07"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/folder/Cad/X-Refs/BASE/ELECTRICAL.dwg"
+sha256 = "703d68ab6c182cb30e40215d6171df683aefb3cd3aa5412c68e7773ea523e21c"
+version = "AC1032"
+features = []
+producer = "ODA SDK 27.9 (byte-identical to cc-01)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-08"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/showcase/cadcraft-sample-asbuilt.dwg"
+sha256 = "517ba144db4bf637538ce1d2085813297cb0de16b67334a9743331fe2e7c7cae"
+version = "AC1032"
+features = ["attributes","dimension","hatch","non_ascii"]
+producer = "civilcraft's own JS writer"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-09"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/fixtures/showcase/cadcraft-sample-house.dwg"
+sha256 = "e089aad1a6218d67affc0ba980472e21bf7070b44099219222e0402b4226e5f3"
+version = "AC1032"
+features = ["attributes","dimension","hatch","non_ascii"]
+producer = "civilcraft's own JS writer"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-10"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/bimcraft-test/fixtures/dwg3d-acad2000.dwg"
+sha256 = "c2028d3a07d85a547ab5d811219ed8519536cec78b57bade3842f4be60a7f673"
+version = "AC1015"
+features = ["custom_objects","proxy_graphics"]
+producer = "unknown (civilcraft fixture)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-11"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/bimcraft-test/fixtures/dwg3d-acad2018.dwg"
+sha256 = "1ab55b9d76907da424348d241678596a7da388ed2d915bb28717d0a4450f05d0"
+version = "AC1032"
+features = ["custom_objects","proxy_graphics"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-12"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/sheetset/details/Details.dwg"
+sha256 = "671f7a4b162abd5c1c8a8cdb7c9be3f1baba1e943b50d67867277c46d2d09556"
+version = "AC1015"
+features = ["attributes","xref"]
+producer = "civilcraft's own JS writer"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-13"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/sheetset/plans/Level%201.dwg"
+sha256 = "31152baf5ccb81e831469ff1b4f5a2754e0428085d9c8ffc8d99acf81668e942"
+version = "AC1032"
+features = ["attributes"]
+producer = "civilcraft's own JS writer"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-14"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/vp-overrides/vp-overrides-2000.dwg"
+sha256 = "91ba03f6a85e42d2e459fc0cd30e4c57c8b6e5654402ba33521389a6e560db47"
+version = "AC1015"
+features = ["custom_objects"]
+producer = "unknown (civilcraft fixture)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-15"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/vp-overrides/vp-overrides-2004.dwg"
+sha256 = "c466c398e635dfacae053d4d2cd1072f319158956557e6982ba2bb217616fa15"
+version = "AC1018"
+features = ["custom_objects"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-16"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/vp-overrides/vp-overrides-2007.dwg"
+sha256 = "f77802997fd7435a5900d79881988ad80964a6585a5baafc3f2119c1c25bcab6"
+version = "AC1021"
+features = ["custom_objects"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-17"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/vp-overrides/vp-overrides-2010.dwg"
+sha256 = "172d9c6f9d9c2065960e289278f3b52da6cc418c811a5b4f94a8ff9f331d26ab"
+version = "AC1024"
+features = ["custom_objects"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-18"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/vp-overrides/vp-overrides-2013.dwg"
+sha256 = "e3c994461f1ea2442aa8a0f1d798825e355da437847cc4321f04839de6f16ac0"
+version = "AC1027"
+features = []
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-19"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/vp-overrides/vp-overrides-2018.dwg"
+sha256 = "3d067d594e79c249ba27106ac6643194e921ff08e4fa0c10f3e58a0882dd4f27"
+version = "AC1032"
+features = []
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-20"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/xclip/xclip-2000.dwg"
+sha256 = "75cd814b73e6bd91222845783cfaa1b1dea529830b705e1dcc10a5ef4d11a247"
+version = "AC1015"
+features = ["custom_objects","hatch"]
+producer = "unknown (civilcraft fixture)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-21"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/xclip/xclip-2004.dwg"
+sha256 = "9f5c574d6b31995273ef646523c9d938df0bceda6415b735ac9680b5b64a20d1"
+version = "AC1018"
+features = ["custom_objects","hatch"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-22"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/xclip/xclip-2007.dwg"
+sha256 = "b52edee73b5162d39230634125e640ec0c4274fa433f6dbd23f94dfdc9e13ff4"
+version = "AC1021"
+features = ["custom_objects","hatch"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-23"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/xclip/xclip-2010.dwg"
+sha256 = "df839ae757e0b3d0bcef33c12151b7d6ba4027094ac514cffe201e2885502746"
+version = "AC1024"
+features = ["custom_objects","hatch"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-24"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/xclip/xclip-2013.dwg"
+sha256 = "9a2b893b7a94458a0607a4a4331ec3d03ab30e9559f1337af3d4c93ef1f8cd2a"
+version = "AC1027"
+features = ["hatch"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-25"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/cadcraft-test/fixtures/xclip/xclip-2018.dwg"
+sha256 = "c8151173dd5a77b4225d078b8db62914cac293e7b6d3fa84ae2596454955099c"
+version = "AC1032"
+features = ["hatch"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-26"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/civilcraft-test/fixtures/cad/site-linework-2000.dwg"
+sha256 = "b3dc7faade9ca03b4ea2decc3722e9712ff36233555c226c6a4dbb71101007ee"
+version = "AC1015"
+features = ["custom_objects"]
+producer = "unknown (civilcraft fixture)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-27"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/civilcraft-test/fixtures/cad/site-linework-2018.dwg"
+sha256 = "c5dccc6051dc8be55143815fdb21a4040c6a1161ccba86a92171d38889b87fb7"
+version = "AC1032"
+features = []
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "cc-28"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/civilcraft-test/fixtures/cad/survey-blocks-2000.dwg"
+sha256 = "c9dd53f4d8ee32c98e0aad8d64e3095128a1595d7c2c8cc89410380b21a2714b"
+version = "AC1015"
+features = ["attributes","custom_objects"]
+producer = "unknown (civilcraft fixture)"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "cc-29"
+url = "https://raw.githubusercontent.com/getcadcraft/civilcraft/b57d9a6bfb08881625c4b7361d0b7083d1bfd916/tests/tools/civilcraft-test/fixtures/cad/survey-blocks-2018.dwg"
+sha256 = "c33857a70916d05a34f417f966a6c78e8a274fca12afb2185dbe41e725e7d509"
+version = "AC1032"
+features = ["attributes"]
+producer = "ODA SDK 27.9"
+license_note = "Apache-2.0 (getcadcraft/civilcraft); the LICENSE at the repository root, commit b57d9a6bfb08"
+
+[[file]]
+name = "brx-01"
+url = "https://raw.githubusercontent.com/Bricsys/rhino.inside-bricscad/8ba2a47d0f365dd3c789688d9c45c20c276470b7/Samples/Building.dwg"
+sha256 = "d2fe9d594c1cc4f690bf5f6e2b2b60e9ce29277c93b508f9ee06008e97958759"
+version = "AC1027"
+features = ["custom_objects"]
+producer = "BricsCAD"
+license_note = "MIT (Bricsys/rhino.inside-bricscad, Copyright (c) 2019 Bricsys NV); the LICENSE at the repository root, commit 8ba2a47d0f36"
+
+[[file]]
+name = "brx-02"
+url = "https://raw.githubusercontent.com/Bricsys/rhino.inside-bricscad/8ba2a47d0f365dd3c789688d9c45c20c276470b7/Samples/Busstation.dwg"
+sha256 = "73d32c80a0f915ba02b9e1e427a88d291de4dd857b632d0d061ce2974a8b83dc"
+version = "AC1027"
+features = ["custom_objects"]
+producer = "BricsCAD"
+license_note = "MIT (Bricsys/rhino.inside-bricscad, Copyright (c) 2019 Bricsys NV); the LICENSE at the repository root, commit 8ba2a47d0f36"
+
+[[file]]
+name = "brx-03"
+url = "https://raw.githubusercontent.com/Bricsys/rhino.inside-bricscad/8ba2a47d0f365dd3c789688d9c45c20c276470b7/Samples/Canopy.dwg"
+sha256 = "98309b8bbefe6e616049d2a5829de8cbbdcd447a3cd2483d3560e7d59b7f18fd"
+version = "AC1027"
+features = ["custom_objects"]
+producer = "BricsCAD"
+license_note = "MIT (Bricsys/rhino.inside-bricscad, Copyright (c) 2019 Bricsys NV); the LICENSE at the repository root, commit 8ba2a47d0f36"
+
+[[file]]
+name = "ezdxf-01"
+url = "https://raw.githubusercontent.com/mozman/ezdxf/7b202613e0d689955b8932a22bcbcf68bdd684f0/docs/graphics/dim_linear_tutorial.dwg"
+sha256 = "88037b595bd46d81c5c98ce7aa428ce6b8506d1aa4602e976811cfb154005155"
+version = "AC1027"
+features = ["custom_objects","dimension","mtext","proxy_graphics"]
+producer = "BricsCAD"
+license_note = "MIT (mozman/ezdxf, Copyright (c) 2020 Manfred Moitzi); the LICENSE at the repository root, commit 7b202613e0d6"
+
+[[file]]
+name = "ezdxf-02"
+url = "https://raw.githubusercontent.com/mozman/ezdxf/7b202613e0d689955b8932a22bcbcf68bdd684f0/docs/graphics/dim_radial_tutorial.dwg"
+sha256 = "1ee2e2d9ea37b87db1afc105b8315aca09813878c35b8cc9cff65f7acd60bb1c"
+version = "AC1027"
+features = ["custom_objects","dimension","mtext","proxy_graphics"]
+producer = "BricsCAD"
+license_note = "MIT (mozman/ezdxf, Copyright (c) 2020 Manfred Moitzi); the LICENSE at the repository root, commit 7b202613e0d6"
+
+[[file]]
+name = "ezdxf-03"
+url = "https://raw.githubusercontent.com/mozman/ezdxf/7b202613e0d689955b8932a22bcbcf68bdd684f0/docs/graphics/dimstyle-vars.dwg"
+sha256 = "91dbcb2ed42d965a97698cb85db34b7cc5b7d0dee8227bf0a275fe8deaa84465"
+version = "AC1027"
+features = ["custom_objects","dimension","mtext","proxy_graphics"]
+producer = "BricsCAD"
+license_note = "MIT (mozman/ezdxf, Copyright (c) 2020 Manfred Moitzi); the LICENSE at the repository root, commit 7b202613e0d6"
+
+[[file]]
+name = "ezdxf-04"
+url = "https://raw.githubusercontent.com/mozman/ezdxf/7b202613e0d689955b8932a22bcbcf68bdd684f0/docs/graphics/dimtad-dimjust.dwg"
+sha256 = "715e69ecb440ebc774227f03d5d456d12a04eb1e618833726cec11c04198659b"
+version = "AC1027"
+features = ["custom_objects","dimension","mtext"]
+producer = "ODA-based (registry 19.5)"
+license_note = "MIT (mozman/ezdxf, Copyright (c) 2020 Manfred Moitzi); the LICENSE at the repository root, commit 7b202613e0d6"
+
+[[file]]
+name = "gdal-02"
+url = "https://raw.githubusercontent.com/OSGeo/gdal/0e24e0288164b5237df0aeb82ab742909e719479/autotest/ogr/data/cad/attribs.dwg"
+sha256 = "af6634bdea3b9cb6e3ae8886fc9619517b46c09deab3e06740cc41cf8ce31169"
+version = "AC1027"
+features = ["attributes","custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "ODA-based (registry 22.6)"
+license_note = "MIT (OSGeo/gdal, LICENSE.TXT section \"GDAL/OGR General\"); commit 0e24e0288164"
+
+[[file]]
+name = "gdal-03"
+url = "https://raw.githubusercontent.com/OSGeo/gdal/0e24e0288164b5237df0aeb82ab742909e719479/autotest/ogr/data/cad/ellipse_r2000.dwg"
+sha256 = "7a3748a716a89b14fda18362c1193444ed26eee14887c92704004f979c378e3b"
+version = "AC1015"
+features = ["custom_objects"]
+producer = "AutoCAD R2000-format (libopencad test data)"
+license_note = "MIT (OSGeo/gdal, LICENSE.TXT section \"GDAL/OGR General\"); commit 0e24e0288164"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "gdal-04"
+url = "https://raw.githubusercontent.com/OSGeo/gdal/0e24e0288164b5237df0aeb82ab742909e719479/autotest/ogr/data/cad/line_r2000.dwg"
+sha256 = "f1936ccc5e26dd1aae3f6a26bf5803bdf53d8e0b24f8c18bf3fb96fc540918e0"
+version = "AC1015"
+features = ["custom_objects"]
+producer = "AutoCAD R2000-format (libopencad test data)"
+license_note = "MIT (OSGeo/gdal, LICENSE.TXT section \"GDAL/OGR General\"); commit 0e24e0288164"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "gdal-05"
+url = "https://raw.githubusercontent.com/OSGeo/gdal/0e24e0288164b5237df0aeb82ab742909e719479/autotest/ogr/data/cad/point2d_r2000.dwg"
+sha256 = "7c87da0caa027f5041c916dc8a81d5156cb61317b6228ee6e16579557ef5447d"
+version = "AC1015"
+features = ["custom_objects"]
+producer = "AutoCAD R2000-format (libopencad test data)"
+license_note = "MIT (OSGeo/gdal, LICENSE.TXT section \"GDAL/OGR General\"); commit 0e24e0288164"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "gdal-06"
+url = "https://raw.githubusercontent.com/OSGeo/gdal/0e24e0288164b5237df0aeb82ab742909e719479/autotest/ogr/data/cad/text_mtext_attdef_r2000.dwg"
+sha256 = "432d33f33f5808a0f8275f13a38fbdafc1be6657eda87e9c353092197b490559"
+version = "AC1015"
+features = ["attributes","custom_objects","mtext","non_ascii"]
+producer = "AutoCAD R2000-format (libopencad test data)"
+license_note = "MIT (OSGeo/gdal, LICENSE.TXT section \"GDAL/OGR General\"); commit 0e24e0288164"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "gdal-07"
+url = "https://raw.githubusercontent.com/OSGeo/gdal/0e24e0288164b5237df0aeb82ab742909e719479/autotest/ogr/data/cad/triple_circles_r2000.dwg"
+sha256 = "4ea5e6230b118e6ca2b17bb42f24f77c7905348da25924a0ada8965ca5e985a4"
+version = "AC1015"
+features = ["custom_objects"]
+producer = "AutoCAD R2000-format (libopencad test data)"
+license_note = "MIT (OSGeo/gdal, LICENSE.TXT section \"GDAL/OGR General\"); commit 0e24e0288164"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "asp-02"
+url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/BlockRefDgn.dwg"
+sha256 = "4ea8117e3396e9ed227f5a05cd2425e9e1c8b1bd94fabf61ad7c982076293626"
+version = "AC1024"
+features = ["custom_objects","proxy_graphics"]
+producer = "AutoCAD 2017 (registry 21.0)"
+license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
+
+[[file]]
+name = "asp-06"
+url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/Drawing11.dwg"
+sha256 = "8a6e1bf534a3c689331607a88c0e6d46620c791a2b2b8b16b92ffed052b43599"
+version = "AC1027"
+features = ["image","proxy_graphics"]
+producer = "AutoCAD 2016 (registry 20.1)"
+license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
+
+[[file]]
+name = "asp-07"
+url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/Line.dwg"
+sha256 = "db44adb2335f383e7c1c14372977a5ded75fa4baf8cb41ab7b596b32dc75f283"
+version = "AC1027"
+features = ["custom_objects"]
+producer = "AutoCAD 2017 (registry 21.0)"
+license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
+
+[[file]]
+name = "asp-09"
+url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/SimpleEntites.dwg"
+sha256 = "bc58e0a5a3052cfdc06cb27636b0f7b1ffe98b32e8a27dab1743a5b9ac3cd259"
+version = "AC1018"
+features = ["attributes","custom_objects","mtext"]
+producer = "AutoCAD 2014 (registry 19.1)"
+license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "asp-12"
+url = "https://raw.githubusercontent.com/aspose-cad/Aspose.CAD-for-.NET/44108cca2375adfd95f1a6f5a9632a952d44f1b2/Examples/Data/DWG-Drawings/meshes.dwg"
+sha256 = "bdef73872233a7d076b1694c45bac00d4f28c97d9e8036ec512b97b1125e2a5e"
+version = "AC1027"
+features = ["custom_objects","proxy_graphics"]
+producer = "AutoCAD 2016 (registry 20.1)"
+license_note = "MIT (aspose-cad/Aspose.CAD-for-.NET, Copyright (c) 2001-2025 Aspose Pty Ltd); the LICENSE at the repository root, commit 44108cca2375"
+
+[[file]]
+name = "fox-01"
+url = "https://raw.githubusercontent.com/FsDiG/Fs.Fox.CAD/ea400b3409e154357c97a3013ff0f9b11f6515ac/OtherStuff/ThCADCore.Test/Drawings/Boundary.dwg"
+sha256 = "c850a6146c419432ffb1cfa029c36281f321e6de7dd87e27cd1fb9269f701cd6"
+version = "AC1027"
+features = ["non_ascii"]
+producer = "AutoCAD 2016 (registry 20.1), ANSI_936"
+license_note = "MIT (FsDiG/Fs.Fox.CAD, Copyright (c) 2021 InspireFunction); the LICENSE at the repository root, commit ea400b3409e1"
+
+[[file]]
+name = "fox-02"
+url = "https://raw.githubusercontent.com/FsDiG/Fs.Fox.CAD/ea400b3409e154357c97a3013ff0f9b11f6515ac/OtherStuff/ThCADCore.Test/Drawings/Merge.dwg"
+sha256 = "96ba6641ccdd24632ca799c300f14c0ce32e4ae0f3d114ba9b5386c6fdbc4c26"
+version = "AC1027"
+features = ["non_ascii"]
+producer = "AutoCAD 2016 (registry 20.1), ANSI_936"
+license_note = "MIT (FsDiG/Fs.Fox.CAD, Copyright (c) 2021 InspireFunction); the LICENSE at the repository root, commit ea400b3409e1"
+
+[[file]]
+name = "dsh-01"
+url = "https://raw.githubusercontent.com/fyjgtddco/DSH-SW-and-CAD/fe671a3ba366bf47506656765ece740ba053a8f6/engineering/examples/DSH_%E5%A4%A7%E8%87%82.dwg"
+sha256 = "d20f883aa039cd991954b3f3a9f82f2baab07778194fee9738afe2a238962a7b"
+version = "AC1015"
+features = ["custom_objects","mtext","non_ascii"]
+producer = "SolidWorks, ANSI_936"
+license_note = "MIT (fyjgtddco/DSH-SW-and-CAD, Copyright (c) 2025); the LICENSE at the repository root, commit fe671a3ba366"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "dsh-02"
+url = "https://raw.githubusercontent.com/fyjgtddco/DSH-SW-and-CAD/fe671a3ba366bf47506656765ece740ba053a8f6/engineering/examples/DSH_%E5%BA%95%E5%BA%A7%E6%B3%95%E5%85%B0.dwg"
+sha256 = "1d9895934dfe40ce3985926d8530ef5d23509e50389ae91f1c1a4861af284d4b"
+version = "AC1015"
+features = ["custom_objects","mtext","non_ascii"]
+producer = "SolidWorks, ANSI_936"
+license_note = "MIT (fyjgtddco/DSH-SW-and-CAD, Copyright (c) 2025); the LICENSE at the repository root, commit fe671a3ba366"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "wz-01"
+url = "https://raw.githubusercontent.com/WuwuZhang0019/CADTools/a8d6bf77eab31153b0379b0f2c5c053f8c6dd149/Zyf.autoCAD/Tools/Emergency-Lighting/assets/default-device-library/assets/ELDEV1/1/block.dwg"
+sha256 = "ae7b56de06757f1d7ca3e59a4dc5c40762b49e101895e097a4f52cc450dd10ee"
+version = "AC1015"
+features = ["attributes","custom_objects","non_ascii"]
+producer = "unknown (Chinese AutoCAD), ANSI_936"
+license_note = "Apache-2.0 (WuwuZhang0019/CADTools); the LICENSE at the repository root, commit a8d6bf77eab3"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "wz-02"
+url = "https://raw.githubusercontent.com/WuwuZhang0019/CADTools/a8d6bf77eab31153b0379b0f2c5c053f8c6dd149/Zyf.autoCAD/Tools/Emergency-Lighting/assets/default-device-library/assets/ELDEV10/1/block.dwg"
+sha256 = "0bac45b84b8f51673c1a5f70704d436912149ead6dd6dacaf7500c510709fa99"
+version = "AC1015"
+features = ["attributes","custom_objects","non_ascii"]
+producer = "unknown (Chinese AutoCAD), ANSI_936"
+license_note = "Apache-2.0 (WuwuZhang0019/CADTools); the LICENSE at the repository root, commit a8d6bf77eab3"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "arx-01"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2000/ObjectARX%202000/classmap/classmap.dwg"
+sha256 = "67b2f70fa0c883bd77fb88c02ace22057249ce49a9c0dfc4ce982c0628eb6464"
+version = "AC1014"
+features = []
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[file.expect]
+open = "unsupported"
+
+[[file]]
+name = "arx-02"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2002/classmap/classmap.dwg"
+sha256 = "3c1e59b472adb072e1f91a2e718d111240c41e354ae0a649009a5364d5b80e96"
+version = "AC1015"
+features = ["attributes","hatch","mtext","non_ascii"]
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-03"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/classmap/classmap.dwg"
+sha256 = "6c72dc5fd6452490b6c3949a36d129c55e3f005149e883b269103fd68cbed7f1"
+version = "AC1018"
+features = ["attributes","hatch","mtext"]
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-04"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/samples/editor/CircleStandard/StandardTest.dwg"
+sha256 = "623e79d3a5422dee1ea9206e698466ec96c994cc0fa925f7f9a348deb8e09d1d"
+version = "AC402b"
+features = []
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[file.expect]
+open = "unsupported"
+
+[[file]]
+name = "arx-05"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/samples/graphics/DrawOrder/red_yellow_blue_Solid.dwg"
+sha256 = "2b1a606e79e5000e65f0e1f7bb6c24dbf8e72237fdf8488ae238ce3862155390"
+version = "AC1018"
+features = ["hatch"]
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-06"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/samples/misc/SheetSet/Label%20Block.dwg"
+sha256 = "7f2c0a990192f63563fc0feec787445972110d423868816f0d1c3ae171164c79"
+version = "AC1018"
+features = []
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-07"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/samples/misc/SheetSet/Pointer%20Blocks.dwg"
+sha256 = "6a1aa7096507181475d2f775ab9815022badc545b330bcefce34d3ea3f55c74e"
+version = "AC1018"
+features = ["hatch"]
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-08"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/samples/misc/SheetSet/Sheet1.dwg"
+sha256 = "54cc4917caf38268c56bc1280dc468bfb2be12c81b3bde35d0ef838b576ab3a1"
+version = "AC1018"
+features = []
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-09"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/samples/misc/SheetSet/Sheet2.dwg"
+sha256 = "761559b462ce9e4f5d28ddc7742403fbdd3d54123f9ce8b21c3be4b4a997090f"
+version = "AC1018"
+features = []
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-10"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/samples/misc/SheetSet/Sheet3.dwg"
+sha256 = "e7b8ae51de690a31dbde3aa52afa3aa3eb173c458ab017e826df4b998d424794"
+version = "AC1018"
+features = []
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-11"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2004/utils/amodeler/docs/topology.dwg"
+sha256 = "c1a9d94abcdfd708ae46d8817f3008f66d08eae05cf77153f54945fd1eac5859"
+version = "AC1012"
+features = []
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[file.expect]
+open = "unsupported"
+
+[[file]]
+name = "arx-12"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2009/classmap/classmap.dwg"
+sha256 = "b4a1437b151491faddaeff8e2786f64b1acdeded8d668384aefbb5eaf490bb96"
+version = "AC1021"
+features = ["custom_objects","mtext"]
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-13"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2009/samples/graphics/AsdkTransientGraphicsSampFolder/DWGMap.dwg"
+sha256 = "7d586d7c868a41f3e726262da83c2b24c615d85216232d327f2338924521cc48"
+version = "AC1021"
+features = ["attributes","custom_objects","image","proxy_graphics"]
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "arx-15"
+url = "https://raw.githubusercontent.com/ADN-DevTech/objectarx_sdks/08b6206d911efc53bc52146d487f823d53ccca09/Arx2012/classmap/classmap.dwg"
+sha256 = "5537821e56871699e3efcf2b18bdf28246f9e27449ac1b3f90da833f767c6f23"
+version = "AC1024"
+features = ["custom_objects","mtext"]
+producer = "AutoCAD (ObjectARX SDK sample)"
+license_note = "MIT (ADN-DevTech/objectarx_sdks, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN DevTech organization); the LICENSE at the repository root, commit 08b6206d911e; historical ObjectARX SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the MIT grant is the republication by Autodesk's ADN DevTech organization"
+
+[[file]]
+name = "adsk-cab-01"
+url = "https://raw.githubusercontent.com/Autodesk-Forge/design.automation-asp.net-cabinet-sample/bbc3f46cdb6357765cb356f98720ebcb0fc2e4db/AutoCADIODemoWebApp/Blank.dwg"
+sha256 = "a90fbd9e62012df3b8121bcc78d841984343170271f377f3846b7a7eb2040717"
+version = "AC1027"
+features = []
+producer = "AutoCAD 2015 (registry 20.0)"
+license_note = "MIT (Autodesk-Forge/design.automation-asp.net-cabinet-sample, Copyright (c) 2016 Autodesk, Inc.); the LICENSE at the repository root, commit bbc3f46cdb63"
+
+[[file]]
+name = "adsk-cab-02"
+url = "https://raw.githubusercontent.com/Autodesk-Forge/design.automation-asp.net-cabinet-sample/bbc3f46cdb6357765cb356f98720ebcb0fc2e4db/AutoCADIODemoWebApp/BlankIso.dwg"
+sha256 = "012f92fb9436d0d01014cc68abdad10c90f75b8ca5f4953a8940955fd24cfc8e"
+version = "AC1027"
+features = []
+producer = "AutoCAD 2015 (registry 20.0)"
+license_note = "MIT (Autodesk-Forge/design.automation-asp.net-cabinet-sample, Copyright (c) 2016 Autodesk, Inc.); the LICENSE at the repository root, commit bbc3f46cdb63"
+
+[[file]]
+name = "adsk-cab-03"
+url = "https://raw.githubusercontent.com/Autodesk-Forge/design.automation-asp.net-cabinet-sample/bbc3f46cdb6357765cb356f98720ebcb0fc2e4db/AutoCADIODemoWebApp/result.dwg"
+sha256 = "4dd5f50db258af7bc3426319a43a730643a4deb6732108ff6836c89042b082bd"
+version = "AC1027"
+features = ["custom_objects"]
+producer = "AutoCAD 2017 (registry 21.0)"
+license_note = "MIT (Autodesk-Forge/design.automation-asp.net-cabinet-sample, Copyright (c) 2016 Autodesk, Inc.); the LICENSE at the repository root, commit bbc3f46cdb63"
+
+[[file]]
+name = "adsk-cab-04"
+url = "https://raw.githubusercontent.com/Autodesk-Forge/design.automation-asp.net-cabinet-sample/bbc3f46cdb6357765cb356f98720ebcb0fc2e4db/CreateCloset.bundle/Custom-Apppackage/demofiles/demodrawing.dwg"
+sha256 = "0aa2031eed22f05787f187bafd32d37fa62a30ef3be0797e0d2fcd2bf11811b8"
+version = "AC1021"
+features = ["attributes","custom_objects","dimension","hatch","mtext","proxy_graphics"]
+producer = "AutoCAD 2008 (registry 17.1)"
+license_note = "MIT (Autodesk-Forge/design.automation-asp.net-cabinet-sample, Copyright (c) 2016 Autodesk, Inc.); the LICENSE at the repository root, commit bbc3f46cdb63"
+
+[[file]]
+name = "adsk-py-01"
+url = "https://raw.githubusercontent.com/Autodesk-Forge/design.automation-python-tutorial/6831e522cda87b70174ef250a4be692d45d9143a/sample%20files/autocad%20sample%20file.dwg"
+sha256 = "cd8e37b23224d8495402da08a574a6cf593d4df744b8621e71a9297949330eb1"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD 2019 (registry 23.0)"
+license_note = "MIT (Autodesk-Forge/design.automation-python-tutorial, Copyright (c) 2017 Autodesk, Inc.); the LICENSE at the repository root, commit 6831e522cda8"
+
+[[file]]
+name = "adsk-dn-01"
+url = "https://raw.githubusercontent.com/autodesk-platform-services/aps-design-automation-dotnet/a9ff9b94f3ed7960b6c1e54f921454fe2fffea19/sample%20files/autocad_sample_file.dwg"
+sha256 = "8a4f2952a9693e3926199472c6e3871b879540b9b49924774fa618a03f7b4671"
+version = "AC1027"
+features = ["custom_objects"]
+producer = "AutoCAD 2020 (registry 23.1)"
+license_note = "MIT (autodesk-platform-services/aps-design-automation-dotnet, Copyright (c) 2018 Autodesk Platform Services); the LICENSE at the repository root, commit a9ff9b94f3ed"
+
+[[file]]
+name = "adsk-house-01"
+url = "https://raw.githubusercontent.com/autodesk-platform-services/autocad-da-acc-model-viewer/2ec39ff338dfb2efe7a5f81f9ea8220a72fb023c/CLBPlugin/House.dwg"
+sha256 = "91a22afa846f6ffa7d61b2d4a70eb46693506aee7e50ba656d061216c2b2ca7b"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "AutoCAD 2025"
+license_note = "MIT (autodesk-platform-services/autocad-da-acc-model-viewer, Copyright (c) 2024 Madhukar Moogala, Autodesk organization); the LICENSE at the repository root, commit 2ec39ff338df"
+
+[[file]]
+name = "cps-01"
+url = "https://raw.githubusercontent.com/chuongmep/CadPythonShell/95153b9d8934afee8bc8b5faefa3ae330dea848d/Script%20Examples/ironpython2.7/sample_base.dwg"
+sha256 = "1082e08370f5c33b41d98e45d781b0c2719abb69097e9d28d35a7731c0c15341"
+version = "AC1032"
+features = ["attributes","custom_objects","dimension","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "AutoCAD 2021 (registry 24.0)"
+license_note = "MIT (chuongmep/CadPythonShell); License.md at the repository root, commit 95153b9d8934. The drawing is an earlier copy of ACadSharp's samples/sample_base.dwg (MIT, Albert Domenech), re-saved by AutoCAD 2021: not byte-identical (its content is a subset of the current sample)"
+
+[[file]]
+name = "omep-01"
+url = "https://raw.githubusercontent.com/chuongmep/OpenMEP/b172d526b91bdf818f602dfecbc92a3d77be9645/docs/OpenMEPPage/autocad/sample_base.dwg"
+sha256 = "56752d996a29d7d8cd88879c95da132902618c73d701bf93cd18833952eabed8"
+version = "AC1032"
+features = ["attributes","custom_objects","dimension","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "AutoCAD 2022 (registry 24.1)"
+license_note = "MIT (chuongmep/OpenMEP); LICENSE.md at the repository root, commit b172d526b91b. The drawing is an earlier copy of ACadSharp's samples/sample_base.dwg (MIT, Albert Domenech), re-saved by AutoCAD 2022: not byte-identical (its content is a subset of the current sample)"
+
+[[file]]
+name = "geo7-01"
+url = "https://raw.githubusercontent.com/KubaSzostak/Geo7/f6e4f6f7913b8ec59c5f8151397e6c3a6e9e2d0f/Source/Geo7.App/dwg/Geo7.dwg"
+sha256 = "76cde761d72888685cfed06a979aafe2a1d37dd972e31f06b31d4d68571a14cc"
+version = "AC1027"
+features = ["attributes","custom_objects","dimension","hatch","mtext","non_ascii"]
+producer = "Teigha .NET 4.0"
+license_note = "MIT (KubaSzostak/Geo7, Copyright (c) 2015 Kuba Szostak); the LICENSE at the repository root, commit f6e4f6f7913b"
+
+[[file]]
+name = "qc-01"
+url = "https://raw.githubusercontent.com/qinchuan1122/cad-dwg-reader/b22d8c28e92deaa9be01f83598b604d26314b0a8/samples/sample_simple.dwg"
+sha256 = "294cfb687e046bd2ab3c7e1340fda9862cdae21ca45cb2e5f851f941565b9783"
+version = "AC1032"
+features = ["dimension","mtext","non_ascii"]
+producer = "ODA SDK 27.1"
+license_note = "MIT (qinchuan1122/cad-dwg-reader); the LICENSE at the repository root, commit b22d8c28e92d"
+
+[[file]]
+name = "codecad-01"
+url = "https://raw.githubusercontent.com/backkem/codecad/64ca4546fdb81cf1e47d0c9cb973b29fe187c562/examples/07-floor-plan.dwg"
+sha256 = "2aba6445edcc698e24c6684d99fe5c25e8c690b46b9b458bf8712b57efff150e"
+version = "AC1015"
+features = ["non_ascii"]
+producer = "acadrust"
+license_note = "MIT (backkem/codecad, Copyright (c) 2025 CodeCAD contributors); the LICENSE at the repository root, commit 64ca4546fdb8"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "codecad-02"
+url = "https://raw.githubusercontent.com/backkem/codecad/64ca4546fdb81cf1e47d0c9cb973b29fe187c562/examples/09-spur-gears.dwg"
+sha256 = "3e2681d02b748c7f0980454405a53e90f9612f499db4e62f3d53b0a068d21cd0"
+version = "AC1015"
+features = ["hatch","non_ascii"]
+producer = "acadrust"
+license_note = "MIT (backkem/codecad, Copyright (c) 2025 CodeCAD contributors); the LICENSE at the repository root, commit 64ca4546fdb8"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "usfs-01"
+url = "https://www.fs.usda.gov/t-d/dwg/ac_1.dwg"
+sha256 = "82de6925bcb8da7ccaf75fb3e0184b8069c8449a95b75202fd9a93f868151b64"
+version = "AC1009"
+features = []
+producer = "AutoCAD R12"
+license_note = "Public domain: a work of the US federal government (USDA Forest Service Engineering AutoCAD Drawing Library, 17 USC 105); the URL is not commit-pinned, the sha256 pins the content"
+
+[file.expect]
+open = "unsupported"
+
+[[file]]
+name = "usfs-02"
+url = "https://www.fs.usda.gov/t-d/dwg/51_114.dwg"
+sha256 = "60baba842dab8d295bba3bf72b2686efb6cb9e23fe74c6d67f00959093735ba6"
+version = "AC1006"
+features = []
+producer = "AutoCAD R10"
+license_note = "Public domain: a work of the US federal government (USDA Forest Service Engineering AutoCAD Drawing Library, 17 USC 105); the URL is not commit-pinned, the sha256 pins the content"
+
+[file.expect]
+open = "unsupported"
+
+[[file]]
+name = "acadsharp-dynblock-alignment"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKALIGNMENTPARAMETER.dwg"
+sha256 = "d7aa1418c6ed4af5930b6ea1b45a8343803b64b3985ceb188edf8cabb6e80c92"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-basepoint"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKBASEPOINTPARAMETER.dwg"
+sha256 = "04374431ecb1df0ec1c63ed49289d06f2d82a620b0c70c4993527eede7a622d9"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-flip"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKFLIPPARAMETER.dwg"
+sha256 = "a1e6ebbe7a858e0def9822d31fea51c8ef35dedd687a6ef81cfc1f8b6d177019"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-linear"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKLINEARPARAMETER.dwg"
+sha256 = "36dc72bad541b911b051936287eeb8abf9a9e80e92f371033dfc1d49a0e965bf"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-point"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKPOINTPARAMETER.dwg"
+sha256 = "808f0a0d7ad029c6a23fed4fd87323fd03d6938f4feee2d8ab64c2e70e21f232"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-polar"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKPOLARPARAMETER.dwg"
+sha256 = "8bdea037b2a59e33be11c5b0267530f0c48123746981007f738affc8d34b67b8"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-rotation"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKROTATIONPARAMETER.dwg"
+sha256 = "143376a25fc02ae6ecaa172c74faf132b344995dd445dd1e672092be44559850"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-visibility"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKVISIBILITYPARAMETER.dwg"
+sha256 = "be1e24ea0cd5194d0c57935b5018123b7cc981331172a1a2ca7cecc2d9a18e4f"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-dynblock-xy"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKXYPARAMETER.dwg"
+sha256 = "044844db69865b22dbe8a9407e3d94abe15af416ad9a03f56765c3e28d7df983"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-geoloc"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/geolocation/geoloc.dwg"
+sha256 = "2dbed5bb66ae0e730cec80b70c0ef27c87633647503bf850a331448f9585cf95"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-sample-base-empty"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/sample_base/empty.dwg"
+sha256 = "ac65283f3e078a8828e0df594b15a0f54498d04b0c88c85476278c8d3bc1acfb"
+version = "AC1032"
+features = []
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-sample-base"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/sample_base/sample_base.dwg"
+sha256 = "2fd52de87040d2b74922579e5e49b7f72943a436b8a11dc1d7f00244aed7da21"
+version = "AC1032"
+features = ["attributes","custom_objects","dimension","hatch","image","mtext","non_ascii","proxy_graphics"]
+producer = "AutoCAD"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-svg-export-sample"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/svg/export_sample.dwg"
+sha256 = "b60b4a7242e43b34ca35561b105b2dda30f2e373602ab5a12900ebc25b1e499b"
+version = "AC1032"
+features = ["custom_objects","dimension","hatch","mtext","non_ascii"]
+producer = "AutoCAD 2025"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[[file]]
+name = "acadsharp-sample-ac1014"
+url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/sample_AC1014.dwg"
+sha256 = "d1ec4519be14ac49ecab5ec024ad951271e00261a1851f623a784a97ba6ede73"
+version = "AC1014"
+features = []
+producer = "AutoCAD R14"
+license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE file at the repository root, commit 29137f3adaf7, covers the repository including samples/"
+
+[file.expect]
+open = "unsupported"

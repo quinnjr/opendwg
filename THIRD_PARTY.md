@@ -39,8 +39,9 @@ objects re-encode byte for byte). Used in `src/object/tables.rs`:
 - LTYPE: the R2007+ text area is present when a dash has the text flag (0x02).
 - The lineweight index table (`CadUtils._indexedValue`) to read layer lineweights 9 (0.35 mm), 11
   (0.50 mm) and 31 (Default) in `tests/tables.rs`.
-ACadSharp's conditional R2004+ owned-object count for xref BLOCK_HEADERs was not followed (ODS
-has none and the corpus has no xref).
+- BLOCK_HEADER: from R2004 an xref or overlaid xref block stores no owned object count (and no
+  owned entities); ODS has the count always. Confirmed on Civil 3D's xref block in `camber-26` of
+  the extended corpus (`corpus/extended.toml`), which decodes to its last bit only so.
 
 ## ACadSharp (MIT) - basic, text and insert entities
 Consulted (not copied) `readInsertCommonData`, `readInsertCommonHandles`, `readCommonAttData`,
@@ -111,10 +112,12 @@ byte for byte) and is pinned by a value test in `tests/hatch_misc.rs`. Used in
 - A proxy's pre-R2018 drawing format holds the version in its low 16 bits.
 Found on the corpus, in neither source: R2013+ ACIS entities end, after the R2007 unknown `BL`,
 with a `B` (DXF 290), the entity's GUID (DXF 2: `BL`, `BS`, `BS`, 8 `RC`) and a 0 read as a `BS`,
-checked against the DXF export. Not in the corpus, so following ODS: ACIS silhouettes (a
-`BL` viewport id and a `BL` wire count; ACadSharp reads a `BLL` and a flag), hatch spline edge fit
-data (start and end tangents always stored from R2010; ACadSharp only after a fit point), the
-OLE2FRAME and ACAD_PROXY_ENTITY layouts (ACadSharp reads an extra text from R2004 in proxies).
+checked against the DXF export. A hatch spline edge stores its R2010+ start and end tangents only
+after a non-zero fit point count, as ACadSharp reads them (ODS: always); confirmed on AutoCAD
+2025's hatch in `acadsharp-svg-export-sample` of the extended corpus. Not in the corpus, so
+following ODS: ACIS silhouettes (a `BL` viewport id and a `BL` wire count; ACadSharp reads a `BLL`
+and a flag), the OLE2FRAME and ACAD_PROXY_ENTITY layouts (ACadSharp reads an extra text from R2004
+in proxies).
 
 ## ACadSharp (MIT) - non-graphical objects and informational sections
 Consulted (not copied), at commit `ed5ff1cf4731c0296bb8931a387bd9d7c634122f`:
@@ -253,6 +256,41 @@ pinned to commit `ed5ff1cf4731c0296bb8931a387bd9d7c634122f`. They are downloaded
 `scripts/fetch-corpus.sh` and are never committed or distributed with this crate. ACadSharp is
 Copyright (c) 2021 Albert Domenech, MIT licence (`LICENSE` at the repository root).
 
+## Extended sample corpus (`corpus/extended.toml`)
+Downloaded on demand by `scripts/fetch-corpus.sh`, pinned by commit (or, for US federal files, by
+SHA-256), never committed or distributed with this crate. Each entry's `license_note` names its
+licence; the sources:
+- mzjensen/Camber (BSD-3-Clause, Copyright (c) 2022 Zachri Jensen): Civil 3D 2023 test drawings.
+- paoloemilioserra/Civil3dToolkit (Apache-2.0): a Civil 3D 2020 drawing.
+- Railcomplete-AS/RailCOMPLETE-DNA-NO-BN (MIT, Copyright (c) 2015-2024 Railcomplete AS): AutoCAD
+  and Civil 3D drawings (Git LFS).
+- getcadcraft/civilcraft (Apache-2.0): ODA SDK and civilcraft-written fixtures.
+- Bricsys/rhino.inside-bricscad (MIT, Copyright (c) 2019 Bricsys NV): BricsCAD samples.
+- mozman/ezdxf (MIT, Copyright (c) 2020 Manfred Moitzi): documentation drawings.
+- OSGeo/gdal (MIT, "GDAL/OGR General" section of LICENSE.TXT): OGR CAD driver test data.
+- aspose-cad/Aspose.CAD-for-.NET (MIT, Copyright (c) Aspose Pty Ltd): Aspose's own test drawings
+  only (`asp-02`, `06`, `07`, `09`, `12`: test geometry saved by Aspose developers). Its example
+  drawings that carry another party's content (company names, domains or e-mail addresses,
+  real-world maps, plans or product drawings) are left out: Aspose cannot relicense them.
+- FsDiG/Fs.Fox.CAD (MIT, Copyright (c) 2021 InspireFunction), fyjgtddco/DSH-SW-and-CAD (MIT,
+  Copyright (c) 2025), WuwuZhang0019/CADTools (Apache-2.0): GBK drawings.
+- ADN-DevTech/objectarx_sdks (MIT, Copyright (c) 2025 Madhukar Moogala, Autodesk ADN): ObjectARX
+  SDK sample drawings, authored by Autodesk and originally under the ObjectARX SDK licence; the
+  MIT grant is their republication in Autodesk's own ADN DevTech organization.
+- Autodesk-Forge/design.automation-asp.net-cabinet-sample and design.automation-python-tutorial
+  (MIT, Copyright (c) 2016/2017 Autodesk, Inc.), autodesk-platform-services/
+  aps-design-automation-dotnet and autocad-da-acc-model-viewer (MIT, Copyright (c) 2018 Autodesk
+  Platform Services / 2024 Madhukar Moogala): Autodesk sample drawings.
+- chuongmep/CadPythonShell and chuongmep/OpenMEP (MIT; their `sample_base.dwg` copies are
+  earlier versions of ACadSharp's `samples/sample_base.dwg`, re-saved, not byte-identical),
+  KubaSzostak/Geo7 (MIT, Copyright (c) 2015
+  Kuba Szostak), qinchuan1122/cad-dwg-reader (MIT), backkem/codecad (MIT, Copyright (c) 2025
+  CodeCAD contributors).
+- DomCR/ACadSharp at commit `29137f3adaf75ddebd532179eda1e811525ca574` (MIT, Copyright (c) 2021
+  Albert Domenech): newer samples (dynamic blocks, geolocation, sample_base, svg, AC1014).
+- USDA Forest Service Engineering AutoCAD Drawing Library: US federal works, public domain
+  (17 USC 105).
+
 ## ACadSharp licence
 The licence of ACadSharp, which covers the test fixtures above (`src/object/testdata/*.bin` and
 `src/section/testdata/header_ac10xx.bin`, not published with the crate), as in
@@ -286,8 +324,7 @@ SOFTWARE.
 ## Tooling (not distributed)
 
 ### ODA File Converter (Open Design Alliance)
-Not bundled or redistributed. Considered for Task 26 (round-trip verification by an independent
-reader). Checked 2026-10-18.
+Not bundled or redistributed. Considered for round-trip verification by an independent reader. Checked 2026-10-18.
 - The download page (https://www.opendesign.com/guestfiles/oda_file_converter) names no licence.
   The only ODA agreement for free downloads is the *Community User Agreement* (5 Sep 2025,
   https://www.opendesign.com/agreements/2025/en/ODA%20Community%20User%20Agreement%2009-2025.pdf),
@@ -308,7 +345,7 @@ reader). Checked 2026-10-18.
   not clearly covered; Documentation may only be used "for evaluation and reference".
 - Outcome: running it manually or from an opt-in local test (developer has accepted the agreement
   and installed it; test skipped when absent) is permitted. Running it in hosted/shared CI is not
-  clearly permitted, so CI must not download or run it. Task 26 uses the fallback described in the
-  spec for CI. Ask ODA (support@opendesign.com) for written confirmation if CI use is wanted.
+  clearly permitted, so CI must not download or run it; CI relies on the library's own tests
+  instead. Ask ODA (support@opendesign.com) for written confirmation if CI use is wanted.
 - Use: `tests/oda.rs` runs a converter the developer installed (`ODA_FILE_CONVERTER` or `PATH`),
   skips with a printed message when it is absent, and never runs it when `CI` is set.

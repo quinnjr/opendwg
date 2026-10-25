@@ -542,6 +542,31 @@ pub(crate) mod tests {
         HandleRef { code, value }
     }
 
+    /// Text whose stored length counts a terminating NUL (as ACadSharp
+    /// writes it) reads without the NUL, from the code page form and from
+    /// the UTF-16 one, and is written back without it: one of the
+    /// non-canonical round trips listed in `crate::object`.
+    #[test]
+    fn text_with_a_counted_nul_drops_it() {
+        let mut w = ObjWriter::new(Handle(0x2A));
+        w.text("Layer\0").unwrap();
+        let with_nul = w.finish(0x13).unwrap();
+        let (mut r, _) = ObjReader::split(&with_nul, Version::R2018, 30).unwrap();
+        assert_eq!(r.text().unwrap(), "Layer");
+        let mut w = ObjWriter::new(Handle(0x2A));
+        w.text("Layer").unwrap();
+        let written = w.finish(0x13).unwrap();
+        assert_ne!(written, with_nul);
+        let (mut r, _) = ObjReader::split(&written, Version::R2018, 30).unwrap();
+        assert_eq!(r.text().unwrap(), "Layer");
+        // R2000: code page bytes in the data stream.
+        let mut data = BitWriter::new();
+        data.write_tv_raw(b"Layer\0").unwrap();
+        let bytes = assemble(Version::R2000, 0x13, &data, None, &BitWriter::new());
+        let (mut r, _) = ObjReader::split(&bytes, Version::R2000, 30).unwrap();
+        assert_eq!(r.text().unwrap(), "Layer");
+    }
+
     #[test]
     fn object_crc_written() {
         let mut w = ObjWriter::new(Handle(0x2A));

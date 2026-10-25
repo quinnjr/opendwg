@@ -1,7 +1,7 @@
 //! Objects of types the library does not decode, kept as bits.
 
 use super::remap::{Mapper, clears_offset, rewrite_ref};
-use super::stream::ObjReader;
+use super::stream::{ObjReader, ObjWriter};
 use crate::bits::BitReader;
 use crate::error::Result;
 use crate::handle::{Handle, HandleRef};
@@ -37,6 +37,30 @@ pub struct RawObject {
 }
 
 impl RawObject {
+    /// The first text field of the object's own data (after the common
+    /// data), as its source version stores it: code page bytes in the data
+    /// stream before R2007, UTF-16 in the string stream from R2007. `None`
+    /// when it does not read.
+    pub(crate) fn first_text(&self, codepage: u16) -> Option<String> {
+        use crate::bits::BitReader;
+        let data = BitReader::with_bit_limit(&self.data, self.data_bits);
+        let strings = self
+            .strings
+            .as_ref()
+            .map(|(b, bits)| BitReader::with_bit_limit(b, *bits));
+        if self.source_version >= Version::R2007 && strings.is_none() {
+            return None;
+        }
+        let mut r = ObjReader::from_streams(
+            data,
+            strings,
+            BitReader::new(&[]),
+            self.source_version,
+            codepage,
+        );
+        r.text().ok()
+    }
+
     /// Keep the rest of each stream of `r`, which the caller has read up to
     /// the end of the common data.
     pub fn decode(
@@ -135,6 +159,48 @@ pub struct UnreadableObject {
 }
 
 /// The remaining bits of `r`, MSB-first and zero-padded, and their count.
+/// Handle stream bits after the last reference that are not end padding: a
+/// reference that does not parse (its counter runs past the stream's end).
+/// A decoder that reads references to the end of the stream keeps them as
+/// stored, with the end padding after them, so the object is written back
+/// as read; empty when every reference parsed.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct HandleTail {
+    /// MSB-first, zero-padded.
+    pub bytes: Vec<u8>,
+    /// How many bits of `bytes` are real.
+    pub bits: u64,
+}
+
+impl HandleTail {
+    /// Write the kept bits to the handle stream.
+    pub(crate) fn write(&self, w: &mut ObjWriter) -> Result<()> {
+        w.handle_stream().write_bits_from(&self.bytes, self.bits)
+    }
+}
+
+/// Every reference left in `r`'s handle stream, read as
+/// [`RawObject::decode`] reads them: a reference that does not parse stops
+/// the list, and the bits from it on are kept ([`HandleTail`]) rather than
+/// failing the object's decode. Fewer than 8 bits left are end padding and
+/// stay unread.
+pub(crate) fn trailing_refs(r: &mut ObjReader) -> Result<(Vec<HandleRef>, HandleTail)> {
+    let mut out = Vec::new();
+    while r.handles.remaining_bits() >= 8 {
+        let at = r.handles.bit_pos();
+        match r.handles.read_handle_ref() {
+            Ok(h) => out.push(h),
+            Err(_) => {
+                r.handles.seek_bit(at)?;
+                let (bytes, bits) = take_rest(&mut r.handles)?;
+                return Ok((out, HandleTail { bytes, bits }));
+            }
+        }
+    }
+    Ok((out, HandleTail::default()))
+}
+
 pub(crate) fn take_rest(r: &mut BitReader) -> Result<(Vec<u8>, u64)> {
     let bits = r.remaining_bits();
     Ok((take_bits(r, bits)?, bits))

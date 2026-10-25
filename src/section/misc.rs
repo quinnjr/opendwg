@@ -349,18 +349,24 @@ impl Preview {
             return Err(Error::BadSentinel("preview start"));
         }
         let overall = c.u32()?;
-        let end = bytes
-            .len()
-            .checked_sub(16)
-            .filter(|&e| e >= c.pos)
-            .ok_or(Error::Truncated { context: CONTEXT })?;
-        if bytes[end..] != PREVIEW_END {
-            return Err(Error::BadSentinel("preview end"));
-        }
         // The overall size counts the bytes between itself and the end
-        // sentinel.
-        if usize::try_from(overall).ok() != Some(end - c.pos) {
-            return Err(corrupt(&format!("overall size {overall}")));
+        // sentinel. AutoCAD can leave stale bytes after the sentinel (the
+        // section keeps the size of an older, larger preview), which are
+        // ignored.
+        let end = usize::try_from(overall)
+            .ok()
+            .and_then(|n| c.pos.checked_add(n))
+            .ok_or_else(|| corrupt(&format!("overall size {overall}")))?;
+        match bytes.get(end..).and_then(|b| b.get(..16)) {
+            None => return Err(Error::Truncated { context: CONTEXT }),
+            Some(s) if s != PREVIEW_END => {
+                return Err(if bytes.ends_with(&PREVIEW_END) {
+                    corrupt(&format!("overall size {overall}"))
+                } else {
+                    Error::BadSentinel("preview end")
+                });
+            }
+            Some(_) => {}
         }
         let n = usize::from(c.array::<1>()?[0]);
         let mut entries = Vec::with_capacity(n);
@@ -480,11 +486,14 @@ impl AppInfo {
     /// files, three in ODA's, as ACadSharp (MIT) `DwgAppInfoWriter` names
     /// it "num strings"). ODS's trailing 8-bit "App info version" is read
     /// when present. The R18 layout (ODS 16.1: 8-bit strings, starting with
-    /// the name) is recognised by its name; its three strings become entries
+    /// the name) is recognised by its name (`AppInfoDataList`, or
+    /// `AppInfoData` as AutoCAD 2004 writes it); its three strings become entries
     /// with zero checksums, the last one the version.
     pub fn decode(bytes: &[u8], diagnostics: &mut Vec<Diagnostic>) -> Result<AppInfo> {
         const CONTEXT: &str = "app info";
-        let name = b"AppInfoDataList";
+        // ODS names the R18 record "AppInfoDataList"; AutoCAD 2004 writes
+        // "AppInfoData" (`arx-03` of the extended corpus).
+        let name = b"AppInfoData";
         let mut c = Cursor::new(bytes, CONTEXT);
         let mut lossy = false;
         let r18 = bytes.get(2..2 + name.len()) == Some(&name[..]);
@@ -561,7 +570,10 @@ impl AppInfo {
             write_text(&mut out, &e.text, CONTEXT)?;
         }
         if let Some(v) = &self.version {
-            let bytes = crate::strings::encode(crate::strings::DEFAULT_CODEPAGE, v);
+            let bytes = crate::strings::encode_exact(crate::strings::DEFAULT_CODEPAGE, v)
+                .ok_or_else(|| {
+                    Error::Encode(format!("{CONTEXT}: version {v:?} is not Windows-1252"))
+                })?;
             let n = u16::try_from(bytes.len() + 1)
                 .map_err(|_| Error::Encode(format!("{CONTEXT}: version too long")))?;
             out.extend_from_slice(&n.to_le_bytes());
@@ -831,6 +843,27 @@ mod tests {
         assert_eq!(Preview::decode(&bytes, None).unwrap(), empty);
     }
 
+    /// AutoCAD leaves stale bytes after the end sentinel when a preview
+    /// shrinks (the section keeps the size of an older, larger one:
+    /// `asp-05`, `cps-01` and ACadSharp's `sample_base.dwg` of the extended
+    /// corpus). The overall size locates the end sentinel; what follows it
+    /// is ignored.
+    #[test]
+    fn stale_bytes_after_the_end_sentinel_are_ignored() {
+        let good = preview_bytes(0x1C0, 6, b"png");
+        let p = Preview::decode(&good, Some(0x1C0)).unwrap();
+        let mut stale = good.clone();
+        stale.extend_from_slice(b"IEND\xAE\x42\x60\x82");
+        stale.extend_from_slice(&PREVIEW_END);
+        assert_eq!(Preview::decode(&stale, Some(0x1C0)).unwrap(), p);
+        assert_eq!(Preview::decode(&stale, None).unwrap(), p);
+        // The sentinel must still be where the overall size puts it.
+        let mut moved = good[..good.len() - 16].to_vec();
+        moved.push(0);
+        moved.extend_from_slice(&PREVIEW_END);
+        assert!(Preview::decode(&moved, Some(0x1C0)).is_err());
+    }
+
     /// Entries outside the section, of unknown codes, twice the same code,
     /// or a wrong overall size are errors, never panics.
     #[test]
@@ -919,6 +952,17 @@ mod tests {
         let x = AppInfo::decode(&with_version, &mut diags).unwrap();
         assert_eq!(x.version.as_deref(), Some("2.7.2.0"));
         assert_eq!(x.encode_r2018().unwrap(), with_version);
+        // A version Windows-1252 cannot hold is refused, not written as a
+        // character reference.
+        let mut y = x.clone();
+        y.version = Some("2.7 \u{4E00}".into());
+        match y.encode_r2018() {
+            Err(Error::Encode(m)) => assert!(m.contains("Windows-1252"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        y.version = Some("2.7 \u{e9}\u{20AC}".into());
+        let bytes = y.encode_r2018().unwrap();
+        assert!(bytes.ends_with(&[b'7', b' ', 0xE9, 0x80, 0]));
         // A count beyond the bytes left.
         let mut bad = want.clone();
         let at = 4 + utf16("AppInfoDataList").len();
@@ -947,6 +991,26 @@ mod tests {
         assert_eq!(texts, ["4001", "<ProductInformation name =\"Teigha\"/>"]);
         assert!(a.entries.iter().all(|e| e.checksum == [0; 16]));
         assert_eq!(a.version.as_deref(), Some("2.7.2.0"));
+    }
+
+    /// AutoCAD 2004's R18 layout names the record "AppInfoData" (`arx-03`
+    /// of the extended corpus), not ODS's "AppInfoDataList".
+    #[test]
+    fn app_info_r18_autocad_2004_name() {
+        let b: &[u8] = &[
+            0x0C, 0, b'A', b'p', b'p', b'I', b'n', b'f', b'o', b'D', b'a', b't', b'a', 0, 0, 0, 0,
+            0, 0x0A, 0, b'6', b'0', b'6', b'3', b'4', b'8', b'3', b'2', b'4', 0, 0x08, 0, b'A',
+            b'u', b't', b'o', b'C', b'A', b'D', 0, 0x0A, 0, b'1', b'6', b'.', b'2', b'.', b'3',
+            b'3', b'.', b'0', 0,
+        ];
+        let mut diags = vec![];
+        let a = AppInfo::decode(b, &mut diags).unwrap();
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(a.name, "AppInfoData");
+        assert_eq!(a.class_version, 0);
+        let texts: Vec<&str> = a.entries.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["606348324", "AutoCAD"]);
+        assert_eq!(a.version.as_deref(), Some("16.2.33.0"));
     }
 
     /// The application information opendwg writes names opendwg and its

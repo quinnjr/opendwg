@@ -854,18 +854,23 @@ mod tests {
         }
     }
 
-    /// The R2018 corpus files, or a reported skip.
+    /// The R2018 files of the main corpus (`corpus/manifest.toml`: AutoCAD's
+    /// own layouts; the extended corpus has other writers'), or a reported
+    /// skip.
     fn corpus_r2018() -> Vec<(String, Vec<u8>)> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/files");
-        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|f| {
-                let bytes = std::fs::read(f.path()).ok()?;
-                bytes
-                    .starts_with(b"AC1032")
-                    .then(|| (f.file_name().to_string_lossy().into_owned(), bytes))
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+        let manifest = std::fs::read_to_string(root.join("manifest.toml")).unwrap_or_default();
+        let names: Vec<&str> = manifest
+            .lines()
+            .filter_map(|l| l.strip_prefix("name = \""))
+            .filter_map(|l| l.strip_suffix('"'))
+            .collect();
+        let mut files: Vec<(String, Vec<u8>)> = names
+            .iter()
+            .filter_map(|n| {
+                let file = format!("{n}.dwg");
+                let bytes = std::fs::read(root.join("files").join(&file)).ok()?;
+                bytes.starts_with(b"AC1032").then_some((file, bytes))
             })
             .collect();
         files.sort();

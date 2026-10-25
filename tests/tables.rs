@@ -1,4 +1,4 @@
-//! Corpus checks of the typed symbol tables (Task 13): every table object
+//! Corpus checks of the typed symbol tables: every table object
 //! decodes typed, the counts match the manifest, R2018 objects re-encode bit
 //! for bit, and values that pin ODS deviations are asserted on real data.
 
