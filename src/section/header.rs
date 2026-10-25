@@ -1241,6 +1241,13 @@ pub fn decode_with_diagnostics(
             });
         }
     }
+    // R2000 headers from SolidWorks (`dsh-01/02`) and from the writer of
+    // civilcraft's R2000 fixtures (`cc-02`, `cc-04`, ...) leave 8 bits: they
+    // end the four tail BS (each -1, where AutoCAD stores other values) with
+    // the R2004+ two BL and B (`10 10 0`, all 0) and pad to the byte, while
+    // every AutoCAD R2000 corpus header ends at its last BS on a byte
+    // boundary. Those R2004+ fields have no R2000 meaning: off-spec, read
+    // with the warning.
     if !unread.is_exact() {
         diagnostics.push(Diagnostic {
             severity: Severity::Warning,

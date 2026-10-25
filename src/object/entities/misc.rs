@@ -15,9 +15,11 @@
 //!   fields ODS does not describe: a `B` (DXF 290), the entity's GUID (DXF
 //!   2: `BL`, `BS`, `BS`, 8 `RC`) and a 0 read as a `BS`, checked against
 //!   the DXF export.
-//! - From R2007 a REGION stores no history handle (ODS: all ACIS entities);
-//!   3DSOLID does, as ACadSharp `readSolid3D` reads it. BODY (not in the
-//!   corpus) is taken to store one, as ODS says.
+//! - From R2007 only a 3DSOLID stores a history handle (ODS: all ACIS
+//!   entities), as ACadSharp `readSolid3D` reads it. A REGION stores none
+//!   (AutoCAD's files), nor does a BODY: the ODA SDK's R2018 BODY (`cc-11`
+//!   of the extended corpus) ends its handle stream before one, while its
+//!   3DSOLID stores one. No AutoCAD R2007+ BODY is in the corpus.
 //! - A VIEWPORT's clip boundary is a hard pointer (ODS: soft), as every
 //!   corpus viewport stores it and ACadSharp `writeViewport` writes it.
 //! - A WIPEOUT, which ODS does not describe, is laid out as an IMAGE, as
@@ -452,6 +454,12 @@ impl AcisKind {
             AcisKind::Body => type_code::BODY,
         }
     }
+
+    /// Whether the entity stores a history handle from R2007: a 3DSOLID
+    /// only (see the module documentation).
+    pub(crate) fn has_history(self) -> bool {
+        self == AcisKind::Solid3d
+    }
 }
 
 /// A GUID as an R2013+ ACIS entity stores it: `BL` data 1, `BS` data 2
@@ -590,8 +598,8 @@ pub struct AcisEntity {
     pub wireframe_bits: u64,
     /// R2007+ unknown `BL`; 0 before.
     pub unknown: i32,
-    /// R2007+ history (hard owner, DXF 350), stored by 3DSOLIDs and BODYs
-    /// (not REGIONs); `None` before R2007 and for REGIONs.
+    /// R2007+ history (hard owner, DXF 350), stored by 3DSOLIDs only;
+    /// `None` before R2007 and for REGIONs and BODYs.
     pub history: Option<Handle>,
 }
 
@@ -794,7 +802,7 @@ impl AcisEntity {
                 unknown: d.read_bs()?,
             }
         };
-        let history = if v >= Version::R2007 && kind != AcisKind::Region {
+        let history = if v >= Version::R2007 && kind.has_history() {
             Some(r.href_abs()?)
         } else {
             None
@@ -827,8 +835,8 @@ impl AcisEntity {
     ///
     /// The R2013+ fields are set as on every corpus entity: DXF 290 set and
     /// a trailing 0 (an entity without data gets the same; the corpus has
-    /// none to compare). A 3DSOLID or BODY read before R2007 has no
-    /// history, and gets a null one.
+    /// none to compare). A 3DSOLID read before R2007 has no history, and
+    /// gets a null one.
     pub fn to_r2013(&self, guid: AcisGuid) -> Option<(AcisEntity, Option<Vec<u8>>)> {
         let data = match &self.payload {
             AcisPayload::DataStorage { .. } => return Some((self.clone(), None)),
@@ -836,10 +844,10 @@ impl AcisEntity {
             AcisPayload::Inline { data, .. } if is_sab(data) => Some(data.clone()),
             AcisPayload::Inline { .. } | AcisPayload::SatBlocks { .. } => return None,
         };
-        let history = match self.kind {
-            AcisKind::Region => None,
-            AcisKind::Solid3d | AcisKind::Body => Some(self.history.unwrap_or_default()),
-        };
+        let history = self
+            .kind
+            .has_history()
+            .then(|| self.history.unwrap_or_default());
         let entity = AcisEntity {
             payload: AcisPayload::DataStorage {
                 flag_290: true,
@@ -864,7 +872,7 @@ impl AcisEntity {
                  writer, which moves its data to AcDs and gives it a GUID",
             ));
         };
-        let has_history = self.kind != AcisKind::Region;
+        let has_history = self.kind.has_history();
         if self.history.is_some() != has_history {
             return Err(encode_err(format!(
                 "a {:?} needs {} history handle",
@@ -1462,7 +1470,7 @@ pub(crate) mod tests {
     }
 
     /// An R2004 entity with the "ACIS empty" bit set carries no data; it
-    /// converts with the R2013 fields set, a BODY getting a null history.
+    /// converts with the R2013 fields set, a BODY with no history.
     #[test]
     fn empty_acis_converts() {
         let mut d = BitWriter::new();
@@ -1483,7 +1491,7 @@ pub(crate) mod tests {
         let guid = AcisGuid::derived("{fp}", Handle(0x80));
         let (y, data) = x.to_r2013(guid).unwrap();
         assert_eq!(data, None);
-        assert_eq!(y.history, Some(Handle(0)));
+        assert_eq!(y.history, None);
         assert!(matches!(y.payload, AcisPayload::DataStorage { guid: g, .. } if g == guid));
         let decode = |r: &mut ObjReader| AcisEntity::decode(r, AcisKind::Body);
         roundtrip(&y, AcisEntity::encode, decode, type_code::BODY);
@@ -1509,7 +1517,7 @@ pub(crate) mod tests {
         assert_eq!(g.to_string().len(), 38);
     }
 
-    /// R2007+ REGIONs store no history; 3DSOLIDs and BODYs one. A history
+    /// R2007+ REGIONs and BODYs store no history; 3DSOLIDs one. A history
     /// that disagrees with the kind is refused on write, and a reference
     /// left after a REGION is not read (so the entity stays raw).
     #[test]
@@ -1519,8 +1527,10 @@ pub(crate) mod tests {
         assert!(region.encode(&mut ObjWriter::new(Handle(0x80))).is_err());
         let mut body = acis();
         body.kind = AcisKind::Body;
-        body.history = None;
         assert!(body.encode(&mut ObjWriter::new(Handle(0x80))).is_err());
+        let mut solid = acis();
+        solid.history = None;
+        assert!(solid.encode(&mut ObjWriter::new(Handle(0x80))).is_err());
         // A solid's bytes read as a region leave the history unread.
         let mut w = ObjWriter::new(Handle(0x80));
         acis().encode(&mut w).unwrap();

@@ -357,3 +357,61 @@ fn relaxed_checks_warn() {
         );
     }
 }
+
+/// The ODA SDK's R2018 BODY (`cc-11`) stores no history handle, as a
+/// REGION; its 3DSOLID stores one. The BODY decodes typed and re-encodes to
+/// the same bytes but the last: the ODA SDK pads the handle stream with a
+/// zero bit where AutoCAD (and the writer) pad with ones, which changes the
+/// last byte and the CRC.
+#[test]
+fn oda_body_has_no_history() {
+    use opendwg::object::{AcisKind, decode_object, encode_object};
+    let Some(path) = common::corpus_file_or_skip("cc-11") else {
+        return;
+    };
+    let bytes = std::fs::read(&path).unwrap();
+    let d = Drawing::from_bytes(&bytes).unwrap();
+    let body = Handle(0x94);
+    let Some(Object::Entity {
+        entity: Entity::Acis(a),
+        ..
+    }) = d.get(body)
+    else {
+        panic!("{:?}", d.get(body).map(|o| o.type_name()))
+    };
+    assert_eq!((a.kind, a.history), (AcisKind::Body, None));
+    let original = common::object_bytes(&bytes)[&body].clone();
+    let out = encode_object(d.get(body).unwrap(), &d.classes).unwrap();
+    assert_eq!(out.len(), original.len());
+    let n = out.len() - 3;
+    assert_eq!(out[..n], original[..n]);
+    let mut ctx =
+        opendwg::object::DecodeCtx::new(opendwg::Version::R2018, d.header.dwgcodepage, &d.classes);
+    assert_eq!(
+        decode_object(&out, body, &mut ctx).unwrap(),
+        *d.get(body).unwrap()
+    );
+}
+
+/// The R2000 MULTILEADER of `cc-04` stores its text's background color as
+/// the ACI index 257 (no color): it decodes typed, with that color.
+#[test]
+fn r2000_multileader_with_no_background_color() {
+    let Some(d) = open("cc-04") else { return };
+    let Some(Object::Entity {
+        entity: Entity::MultiLeader(m),
+        ..
+    }) = d.get(Handle(0x1C1E))
+    else {
+        panic!("not a typed MULTILEADER")
+    };
+    let opendwg::object::MLeaderContent::Text(t) = &m.context.content else {
+        panic!("no text content")
+    };
+    assert_eq!(t.bg_color, opendwg::Color::None);
+    assert!(
+        d.diagnostics()
+            .iter()
+            .all(|x| x.handle != Some(Handle(0x1C1E)))
+    );
+}

@@ -37,8 +37,9 @@ pub enum Color {
     },
     /// No color: the R2004+ CMC color method 0xC8 (RGB long exactly
     /// 0xC8000000). It is meaningful where a color may be absent: the corpus
-    /// has it only as a table style cell's background (no fill). ODS does
-    /// not list the method. It has no ENC (entity color) or pre-R2004 form;
+    /// has it as a table style cell's background (no fill), and an R2000
+    /// MULTILEADER's text background as the ACI index 257. ODS does not list
+    /// the method. It has no ENC (entity color) or pre-R2004 form;
     /// writing it there is an error.
     None,
 }
@@ -397,7 +398,15 @@ impl BitReader<'_> {
     /// R2004+ CMC carries no such sign, so the flag is always false there.
     pub fn read_cmc_layer(&mut self, version: Version) -> Result<(Color, bool)> {
         if version < Version::R2004 {
-            return from_aci_signed(self.read_bs()?);
+            // 257 is "no color" (ObjectARX's ACI value for none), which an
+            // R2000 CMC has no other way to store: the R2000 MULTILEADER of
+            // `cc-04` (extended corpus) has it as its text's background
+            // color, with the fill off, and reads to the end of its data
+            // with it.
+            return match self.read_bs()? {
+                257 => Ok((Color::None, false)),
+                i => from_aci_signed(i),
+            };
         }
         self.read_cmc_2004(version).map(|c| (c, false))
     }
@@ -503,6 +512,26 @@ mod tests {
     use super::*;
     use crate::bits::{bits, byte_bits};
 
+    /// A pre-R2004 CMC with index 257 is no color: the R2000 MULTILEADER
+    /// `cc-04` of the extended corpus stores it as its text's background
+    /// color (no fill), and decodes to the end of its data with it. Other
+    /// indexes beyond 256 stay errors, and no other color field takes 257.
+    #[test]
+    fn r2000_cmc_257_is_no_color() {
+        use crate::bits::BitWriter;
+        let read = |i: i16| {
+            let mut w = BitWriter::new();
+            w.write_bs(i);
+            let bytes = w.into_bytes();
+            BitReader::new(&bytes).read_cmc_layer(Version::R2000)
+        };
+        assert_eq!(read(257).unwrap(), (Color::None, false));
+        assert!(read(258).is_err());
+        assert!(read(-257).is_err());
+        assert_eq!(read(256).unwrap(), (Color::ByLayer, false));
+        assert!(from_aci(257).is_err());
+    }
+
     /// Every palette entry follows the palette's structure: 9 fixed colors;
     /// for 10-249, 24 hues 15 degrees apart with 10 shades each (even: the
     /// full hue, odd: halfway to white; scaled by 1, 0.65, 0.5, 0.3, 0.15
@@ -584,8 +613,9 @@ mod tests {
             BitReader::new(&bits("01 00000101")).read_cmc(v).unwrap(),
             Color::Index(5)
         );
+        // 258: no color index (257 is no color, see below).
         assert!(
-            BitReader::new(&bits("00 00000001 00000001"))
+            BitReader::new(&bits("00 00000010 00000001"))
                 .read_cmc(v)
                 .is_err()
         );
