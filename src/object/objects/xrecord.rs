@@ -96,8 +96,10 @@ pub(crate) fn format_handle_text(h: Handle, like: &str) -> String {
     format!("{digits:0>width$}")
 }
 
-/// The value of one extended record item.
+/// The value of one extended record item. Non-exhaustive: more value
+/// forms may be added.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[allow(missing_docs)] // field by field, as ODS names them
 pub enum XRecordValue {
