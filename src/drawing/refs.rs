@@ -265,11 +265,14 @@ impl RefIndex {
         }
     }
 
-    /// `from` no longer refers to `to` at all.
-    pub(crate) fn remove_edges(&mut self, from: Handle, to: Handle) {
+    /// `from` no longer refers to any of `to` at all (one pass over its
+    /// references, however many go).
+    pub(crate) fn remove_edges(&mut self, from: Handle, to: &HashSet<Handle>) {
         if let Some(node) = self.nodes.get_mut(&from) {
-            node.refs.retain(|&(t, _)| t != to);
-            self.drop_referrer(to, from);
+            node.refs.retain(|(t, _)| !to.contains(t));
+            for &t in to {
+                self.drop_referrer(t, from);
+            }
         }
     }
 
@@ -296,6 +299,17 @@ pub(crate) struct IndexState {
     index: Option<RefIndex>,
     dirty: HashSet<Handle>,
     pub(crate) work: usize,
+    /// The number of objects links were dropped from by removals (each
+    /// object's lists passed over once per removal), for tests.
+    pub(crate) detached: usize,
+    /// For the block records looked at by the circular insert check, the
+    /// blocks their entities insert (INSERT and MINSERT); kept up to date by
+    /// the add methods, and an entry dropped when its block's list or one of
+    /// its entities may have changed (see [`IndexState::forget_inserts`]).
+    pub(crate) block_inserts: HashMap<Handle, HashSet<Handle>>,
+    /// The number of block entity lists scanned to fill `block_inserts`, for
+    /// tests.
+    pub(crate) block_scans: usize,
 }
 
 impl IndexState {
@@ -367,6 +381,11 @@ impl IndexState {
                 self.work += 1;
             }
         }
+    }
+
+    /// Drop what `block_inserts` holds of block record `block`.
+    pub(crate) fn forget_inserts(&mut self, block: Handle) {
+        self.block_inserts.remove(&block);
     }
 
     pub(crate) fn mark_dirty(&mut self, h: Handle) {

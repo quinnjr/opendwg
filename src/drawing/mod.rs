@@ -228,7 +228,18 @@ impl Drawing {
     /// change through this method broke. The object's references are
     /// recomputed for [`Drawing::referrers`] at its next use.
     pub fn get_mut(&mut self, h: Handle) -> Option<&mut Object> {
-        self.ref_index.get_mut().mark_dirty(h);
+        // The circular insert check's cache: a block record's list, or an
+        // entity of its list, may change.
+        let block = match self.objects.get(&h) {
+            Some(Object::Entity { .. }) => self.owner_of(h),
+            Some(_) => Some(h),
+            None => None,
+        };
+        let state = self.ref_index.get_mut();
+        state.mark_dirty(h);
+        if let Some(block) = block {
+            state.forget_inserts(block);
+        }
         self.objects.get_mut(&h)
     }
 

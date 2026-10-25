@@ -45,8 +45,8 @@ use crate::object::Dictionary;
 use crate::object::tables::{HARD_OWNER, SOFT_OWNER, SOFT_POINTER};
 use crate::object::{
     Attrib, Block, BlockRecord, DictionaryWithDefault, DimStyle, Entity, EntityCommon, EntityList,
-    ImageDefReactor, Layer, Layout, Linetype, MInsert, NonGraphical, Object, ObjectCommon,
-    TableControl, TableEntry, TableKind, TextStyle, type_refs,
+    ImageDefReactor, Layer, Layout, Linetype, LinetypeRef, MInsert, NonGraphical, Object,
+    ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, type_refs,
 };
 use crate::section::DxfClass;
 use crate::section::classes::{FIRST_CLASS_NUMBER, known_class};
@@ -89,21 +89,23 @@ fn has_linked_list(obj: &Object) -> bool {
     matches!(list, EntityList::Linked { .. })
 }
 
-/// Remove every link from `obj` to `x` that [`Drawing::remove`] can drop:
-/// list entries (entities, inserts, attributes, vertices, control and
-/// dictionary entries, group members, sort table entries, layout
-/// viewports), a SEQEND, the last active viewport, a reactor and the
-/// extension dictionary. Other references stay.
-fn detach(obj: &mut Object, x: Handle) {
+/// Remove every link from `obj` to the objects of `xs` that
+/// [`Drawing::remove`] can drop: list entries (entities, inserts,
+/// attributes, vertices, control and dictionary entries, group members, sort
+/// table entries, layout viewports), a SEQEND, the last active viewport, a
+/// reactor and the extension dictionary. Other references stay. Each list is
+/// passed over once, however many of its entries go.
+fn detach(obj: &mut Object, xs: &HashSet<Handle>) {
+    let gone = |h: &Handle| xs.contains(h);
     let common = match obj {
         Object::Entity { common, .. } => &mut common.obj,
         Object::Other { common, .. } => common,
     };
-    common.reactors.retain(|&r| r != x);
-    if common.xdict == Some(x) {
+    common.reactors.retain(|r| !gone(r));
+    if common.xdict.is_some_and(|x| gone(&x)) {
         common.xdict = None;
     }
-    let drop = |v: &mut Vec<Handle>| v.retain(|&h| h != x);
+    let drop = |v: &mut Vec<Handle>| v.retain(|h| !gone(h));
     match obj {
         Object::Other { object, .. } => match object {
             NonGraphical::BlockRecord(b) => {
@@ -120,15 +122,15 @@ fn detach(obj: &mut Object, x: Handle) {
                     drop(&mut c.extra);
                 }
             }
-            NonGraphical::Dictionary(d) => d.entries.retain(|&(_, h)| h != x),
+            NonGraphical::Dictionary(d) => d.entries.retain(|(_, h)| !gone(h)),
             NonGraphical::DictionaryWithDefault(d) => {
-                d.dictionary.entries.retain(|&(_, h)| h != x);
+                d.dictionary.entries.retain(|(_, h)| !gone(h));
             }
             NonGraphical::Group(g) => drop(&mut g.entities),
-            NonGraphical::SortEntsTable(s) => s.entries.retain(|&(_, e)| e != x),
+            NonGraphical::SortEntsTable(s) => s.entries.retain(|(_, e)| !gone(e)),
             NonGraphical::Layout(l) => {
                 drop(&mut l.viewports);
-                if l.active_viewport == x {
+                if gone(&l.active_viewport) {
                     l.active_viewport = Handle(0);
                 }
             }
@@ -139,7 +141,7 @@ fn detach(obj: &mut Object, x: Handle) {
                 if let EntityList::Owned(v) = &mut i.attribs {
                     drop(v);
                 }
-                if i.seqend == Some(x) {
+                if i.seqend.is_some_and(|s| gone(&s)) {
                     i.seqend = None;
                 }
             }
@@ -607,8 +609,11 @@ impl Drawing {
     /// The objects that refer to `h`, in handle order, each once: through
     /// their type-specific data, an entity's layer, linetype, material, plot
     /// style, color book or visual styles, or their extended data (see
-    /// `drawing::refs`). Owners, reactors and extension dictionaries are not
-    /// referrers. Header variables are listed by
+    /// `drawing::refs`). An object's own owner, reactor and extension
+    /// dictionary links do not count; but an owner that lists the object in
+    /// its data (a table control's entries, a block record's entities, a
+    /// dictionary's entries, an insert's attributes) refers to it and is
+    /// returned. Header variables are listed by
     /// [`Drawing::header_references`].
     ///
     /// The first call builds a reverse index of every reference, in time
@@ -695,7 +700,9 @@ impl Drawing {
     /// Check a new object: its common data has no extension dictionary (it
     /// cannot share one) and every reactor exists; every reference it makes
     /// is to an existing object or one in `pending` (added with it), and it
-    /// can be encoded as R2018.
+    /// can be encoded as R2018; an entity's layer is a layer, its linetype a
+    /// linetype, and a multiline has as many lines as its style has
+    /// elements (the kind checks of `validate()`).
     fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
         let common = obj.object_common();
         if common.xdict.is_some() {
@@ -725,6 +732,46 @@ impl Drawing {
                     Some(common.obj.handle),
                     format!("{} is not a layer", common.layer),
                 ));
+            }
+            // The kind checks `validate()` makes of an entity's references,
+            // so that nothing added here is refused at save.
+            if let LinetypeRef::Handle(lt) = common.linetype {
+                if !matches!(
+                    self.objects.get(&lt),
+                    Some(Object::Other {
+                        object: NonGraphical::Linetype(_),
+                        ..
+                    })
+                ) && !pending.contains(&lt)
+                {
+                    return Err(invalid(
+                        Some(common.obj.handle),
+                        format!("{lt} is not a linetype"),
+                    ));
+                }
+            }
+        }
+        if let Object::Entity {
+            entity: Entity::MLine(m),
+            ..
+        } = obj
+        {
+            if let Some(Object::Other {
+                object: NonGraphical::MLineStyle(s),
+                ..
+            }) = self.objects.get(&m.style)
+            {
+                if usize::from(m.lines_in_style) != s.elements.len() {
+                    return Err(invalid(
+                        Some(common.handle),
+                        format!(
+                            "the multiline has {} lines, but its style {} has {} elements",
+                            m.lines_in_style,
+                            m.style,
+                            s.elements.len()
+                        ),
+                    ));
+                }
             }
         }
         Ok(())
@@ -785,8 +832,10 @@ impl Drawing {
     /// a polyline without vertices gets its SEQEND here), for an insert of
     /// a layout's block or one that would make a circular block reference
     /// (at any depth of nested inserts), for common data with an
-    /// extension dictionary, for a layer that is not a layer, for an
-    /// entity that cannot be encoded as R2018 and for an entity of a class
+    /// extension dictionary, for a layer that is not a layer or a linetype
+    /// that is not a linetype, for a multiline whose line count is not its
+    /// style's element count, for an entity that cannot be encoded as R2018
+    /// and for an entity of a class
     /// type the library has no class definition of. A reference to a missing
     /// object is [`Error::NotFound`]. On error nothing changes.
     ///
@@ -980,6 +1029,12 @@ impl Drawing {
             b.inserts.push(h);
             edges.extend(target.map(|t| (t, h, SOFT_POINTER)));
         }
+        if let (Some(t), Some(known)) = (
+            target,
+            self.ref_index.get_mut().block_inserts.get_mut(&block),
+        ) {
+            known.insert(t);
+        }
         self.ref_index
             .get_mut()
             .added(&self.objects, &handles, &edges);
@@ -1052,19 +1107,31 @@ impl Drawing {
     }
 
     /// Whether block record `from` is `to` or holds, through INSERTs and
-    /// MINSERTs nested at any depth, an insert of `to`.
+    /// MINSERTs nested at any depth, an insert of `to`. The blocks each
+    /// block inserts are cached (see `IndexState::block_inserts`), so a
+    /// block's entities are scanned once, not at every insert added.
     fn block_reaches(&self, from: Handle, to: Handle) -> bool {
+        let mut state = self.ref_index.lock();
         let mut stack = vec![from];
         let mut seen = HashSet::from([from]);
         while let Some(b) = stack.pop() {
             if b == to {
                 return true;
             }
-            for e in self.entities_in(b) {
-                if let Some(Object::Entity { entity, .. }) = self.objects.get(&e) {
-                    if let Some(t) = insert_block(entity).filter(|&t| seen.insert(t)) {
-                        stack.push(t);
-                    }
+            if !state.block_inserts.contains_key(&b) {
+                let targets: HashSet<Handle> = self
+                    .entities_in(b)
+                    .filter_map(|e| match self.objects.get(&e) {
+                        Some(Object::Entity { entity, .. }) => insert_block(entity),
+                        _ => None,
+                    })
+                    .collect();
+                state.block_scans += 1;
+                state.block_inserts.insert(b, targets);
+            }
+            for &t in &state.block_inserts[&b] {
+                if seen.insert(t) {
+                    stack.push(t);
                 }
             }
         }
@@ -1688,7 +1755,10 @@ impl Drawing {
     ///
     /// To remove several objects that refer to each other (the
     /// unconvertible objects of an old drawing, say), use
-    /// [`Drawing::remove_all`].
+    /// [`Drawing::remove_all`]. It is also the way to remove many entities:
+    /// each call passes once over the lists the removed objects leave (an
+    /// owning block's entity list, say), however many go, while removing
+    /// them one by one passes over such a list once per call.
     ///
     /// The work is that of the removed objects and the objects that refer to
     /// them, not of the drawing (see `drawing::refs`).
@@ -1806,9 +1876,17 @@ impl Drawing {
             .collect();
         for (&r, (xs, _)) in &plan {
             if let Some(obj) = self.objects.get_mut(&r) {
-                for &x in xs {
-                    detach(obj, x);
-                }
+                detach(obj, xs);
+                state.detached += 1;
+            }
+        }
+        for &x in &set {
+            let block = match self.objects.get(&x) {
+                Some(Object::Entity { .. }) => self.owner_of(x),
+                _ => Some(x),
+            };
+            if let Some(block) = block {
+                state.forget_inserts(block);
             }
         }
         let mut removed: BTreeMap<Handle, Object> = BTreeMap::new();
@@ -1826,9 +1904,7 @@ impl Drawing {
             if recompute {
                 state.refresh(&self.objects, r);
             } else if let Some(index) = state.index_mut() {
-                for x in xs {
-                    index.remove_edges(r, x);
-                }
+                index.remove_edges(r, &xs);
                 if let Some(obj) = self.objects.get(&r) {
                     index.set_reactors(r, &obj.object_common().reactors);
                 }
@@ -1865,7 +1941,7 @@ impl Drawing {
         &self,
         set: &[Handle],
         index: &RefIndex,
-    ) -> Result<(BTreeMap<Handle, (Vec<Handle>, bool)>, usize)> {
+    ) -> Result<(BTreeMap<Handle, (HashSet<Handle>, bool)>, usize)> {
         let in_set: HashSet<Handle> = set.iter().copied().collect();
         let unknown: Vec<Diagnostic> = index
             .incomplete()
@@ -1888,19 +1964,16 @@ impl Drawing {
             .collect();
         let mut blocking = BTreeSet::new();
         // Each referrer outside the set, with the removed objects it refers to.
-        let mut referred: BTreeMap<Handle, Vec<Handle>> = BTreeMap::new();
+        let mut referred: BTreeMap<Handle, HashSet<Handle>> = BTreeMap::new();
         for &x in set {
             for (r, _) in index.referrers(x) {
                 if !in_set.contains(&r) {
-                    let xs = referred.entry(r).or_default();
-                    if !xs.contains(&x) {
-                        xs.push(x);
-                    }
+                    referred.entry(r).or_default().insert(x);
                 }
             }
         }
         let mut work = 0;
-        let mut plan: BTreeMap<Handle, (Vec<Handle>, bool)> = BTreeMap::new();
+        let mut plan: BTreeMap<Handle, (HashSet<Handle>, bool)> = BTreeMap::new();
         for (r, xs) in referred {
             let Some(obj) = self.objects.get(&r) else {
                 continue;
@@ -1918,9 +1991,7 @@ impl Drawing {
                 continue;
             }
             let mut after = obj.clone();
-            for &x in &xs {
-                detach(&mut after, x);
-            }
+            detach(&mut after, &xs);
             let (left, complete) = object_refs(&after);
             work += 1;
             let mut ok = complete;
@@ -1951,10 +2022,8 @@ impl Drawing {
             });
             for r in index.reactor_holders(x).chain(owner) {
                 if !in_set.contains(&r) {
-                    let (xs, _) = plan.entry(r).or_insert_with(|| (Vec::new(), false));
-                    if !xs.contains(&x) {
-                        xs.push(x);
-                    }
+                    let (xs, _) = plan.entry(r).or_insert_with(|| (HashSet::new(), false));
+                    xs.insert(x);
                 }
             }
         }
@@ -2188,6 +2257,96 @@ mod tests {
             assert_index_fresh(&d);
         }
         assert_eq!(deltas[0], deltas[1], "independent of the drawing's size");
+    }
+
+    /// Removing k entities at once from a block of 1k or of 100k entities
+    /// passes once over the block's lists and recomputes no references,
+    /// whatever the block's size; the entities left keep their order.
+    #[test]
+    fn removal_work_is_independent_of_the_block_size() {
+        let k = 200;
+        let mut counts = vec![];
+        for size in [1_000, 100_000] {
+            let mut d = Drawing::new();
+            let lines: Vec<Handle> = (0..size).map(|i| line(&mut d, i)).collect();
+            d.referrers(d.model_space());
+            let (built, detached) = {
+                let s = d.ref_index.lock();
+                (s.work, s.detached)
+            };
+            // Every other line, from the middle of the block.
+            let gone: Vec<Handle> = lines[size / 2..]
+                .iter()
+                .step_by(2)
+                .take(k)
+                .copied()
+                .collect();
+            let removed = d.remove_all(&gone).unwrap();
+            assert_eq!(removed.len(), k);
+            let s = d.ref_index.lock();
+            counts.push((s.work - built, s.detached - detached));
+            drop(s);
+            let gone: HashSet<Handle> = gone.into_iter().collect();
+            let left: Vec<Handle> = d.entities_in(d.model_space()).collect();
+            let expected: Vec<Handle> = lines
+                .iter()
+                .copied()
+                .filter(|h| !gone.contains(h))
+                .collect();
+            assert_eq!(left, expected, "order kept");
+            assert_index_fresh(&d);
+        }
+        assert_eq!(counts[0], counts[1], "independent of the block's size");
+        assert_eq!(counts[0], (0, 1), "one pass over model space, no encodes");
+    }
+
+    /// The circular insert check scans each block's entities once: adding
+    /// more inserts of a block reuses what it found, while a change through
+    /// `get_mut` or a removal makes it look again, so cycles made that way
+    /// are still refused.
+    #[test]
+    fn insert_cycle_check_scans_each_block_once() {
+        use crate::object::Insert;
+        let mut d = Drawing::new();
+        let l0 = d.layer_by_name("0").unwrap();
+        let [a, b, c] = ["A", "B", "C"].map(|n| d.add_block(n).unwrap());
+        let ins = |d: &mut Drawing, into: Handle, of: Handle| {
+            d.add_entity(
+                into,
+                EntityCommon::new(l0),
+                Entity::Insert(Insert::new(of, [0.0; 3])),
+            )
+        };
+        let scans = |d: &Drawing| d.ref_index.lock().block_scans;
+        ins(&mut d, a, b).unwrap();
+        let line_in_b = {
+            let x = Entity::Line(Line {
+                start: [0.0; 3],
+                end: [1.0, 0.0, 0.0],
+                thickness: 0.0,
+                extrusion: [0.0, 0.0, 1.0],
+            });
+            d.add_entity(b, EntityCommon::new(l0), x).unwrap()
+        };
+        // A into C scans A and B, once.
+        ins(&mut d, c, a).unwrap();
+        let first = scans(&d);
+        assert_eq!(first, 2);
+        for _ in 0..10 {
+            ins(&mut d, c, a).unwrap();
+        }
+        assert_eq!(scans(&d), first, "cached");
+        // B's line made an insert of C through get_mut: C into A is now
+        // circular (C holds A holds B holds C).
+        if let Some((_, e)) = d.entity_mut(line_in_b) {
+            *e = Entity::Insert(Insert::new(c, [0.0; 3]));
+        }
+        assert!(matches!(ins(&mut d, a, c), Err(Error::Invalid(_))));
+        assert!(matches!(ins(&mut d, c, a), Err(Error::Invalid(_))));
+        // Removed again, A goes into C once more.
+        d.remove(line_in_b).unwrap();
+        ins(&mut d, c, a).unwrap();
+        assert!(matches!(ins(&mut d, b, c), Err(Error::Invalid(_))));
     }
 
     /// Removing every removable object of the sample in turn, each from the
