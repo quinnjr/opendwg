@@ -321,6 +321,7 @@ impl Drawing {
         v.entities();
         v.groups();
         v.tables();
+        v.xref_blocks();
         v.named_objects();
         v.header();
         v.ds_flags();
@@ -648,8 +649,19 @@ impl<'a> Validator<'a> {
         self.get(h).is_some_and(|o| o.raw().is_some())
     }
 
+    /// Whether an ownership finding between `child` and `owner` is only a
+    /// warning: one of them is raw (see [`Self::unmodelled`]) and the child
+    /// is not an entity. An entity's owner and the block list it is in are
+    /// always checked (the writer repairs an entity exactly one block
+    /// lists; see `Drawing::misowned_entities`), raw or not: the evidence
+    /// for the relaxation is non-graphical Civil 3D styles only.
+    fn lenient(&self, child: Handle, owner: Handle) -> bool {
+        let entity = matches!(self.get(child), Some(Object::Entity { .. }));
+        !entity && (self.unmodelled(child) || self.unmodelled(owner))
+    }
+
     /// `child` (which exists) is listed by `owner` as `how`: its owner must
-    /// be `owner` (a warning when either is raw, see [`Self::unmodelled`]).
+    /// be `owner` (a warning only as [`Self::lenient`] says).
     fn owned_by(&mut self, child: Handle, owner: Handle, how: &str) {
         let Some(obj) = self.get(child) else {
             return;
@@ -664,7 +676,7 @@ impl<'a> Validator<'a> {
                 self.name(child),
                 self.name(owner)
             );
-            if self.unmodelled(child) || self.unmodelled(owner) {
+            if self.lenient(child, owner) {
                 self.warning(Some(child), message);
             } else {
                 self.error(Some(child), message);
@@ -702,7 +714,7 @@ impl<'a> Validator<'a> {
                             // their owner dictionary does not list
                             // (`adsk-py-01`, `asp-05`, `asp-10`). A raw
                             // object's ownership is not modelled.
-                            if is_dictionary(o) || self.unmodelled(owner) || self.unmodelled(h) {
+                            if is_dictionary(o) || self.lenient(h, owner) {
                                 self.warning(Some(h), message);
                             } else {
                                 self.error(Some(h), message);
@@ -984,6 +996,29 @@ impl<'a> Validator<'a> {
                 ..
             }) if c.kind == kind => Some((control, c)),
             _ => None,
+        }
+    }
+
+    /// An xref or overlay block record owns no entity: they are in the
+    /// referenced file, and R2018 stores no entity list for it.
+    fn xref_blocks(&mut self) {
+        for (h, obj) in self.objects() {
+            if let Object::Other {
+                object: NonGraphical::BlockRecord(b),
+                ..
+            } = obj
+            {
+                self.work += 1;
+                let owns = matches!(&b.entities, EntityList::Owned(v) if !v.is_empty());
+                if (b.is_xref || b.xref_overlaid) && owns {
+                    let message = format!(
+                        "{}: an xref or overlay block cannot own entities (they are in the \
+                         referenced file)",
+                        self.name(h)
+                    );
+                    self.error(Some(h), message);
+                }
+            }
         }
     }
 

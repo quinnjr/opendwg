@@ -206,9 +206,10 @@ pub struct MInsert {
     pub column_spacing: f64,
     pub row_spacing: f64,
     /// The reference code the file stored the R2004+ attributes with (the
-    /// first one's), written again so an unchanged MINSERT round-trips
-    /// exactly; without it (built by hand, or no attributes read) they are
-    /// written as soft pointers (see [`MInsert`]'s encoder).
+    /// first one's, when absolute: 2 to 5), written again so an unchanged
+    /// MINSERT round-trips exactly; without it (built by hand, no
+    /// attributes read, or a relative code read) they are written as soft
+    /// pointers (see [`MInsert`]'s encoder).
     #[cfg_attr(feature = "serde", serde(skip))]
     pub read_attrib_code: AsRead<u8>,
 }
@@ -227,7 +228,12 @@ impl MInsert {
             rows,
             column_spacing,
             row_spacing,
-            read_attrib_code: code.map_or_else(AsRead::default, AsRead::new),
+            // Only an absolute code is kept: a relative one (6, 8, 0xA,
+            // 0xC) names a handle from the MINSERT's own, so written with
+            // the absolute handle it would name another object.
+            read_attrib_code: code
+                .filter(|c| (2..=5).contains(c))
+                .map_or_else(AsRead::default, AsRead::new),
         })
     }
 
@@ -355,6 +361,40 @@ mod tests {
         assert_eq!(read, m);
         assert_eq!(encode(&read), stored);
         assert_eq!(attrib_codes(&stored), [HARD_OWNER; 2]);
+        // Stored as offsets from the MINSERT (0x80): +1 (code 6) and +2
+        // (code 0xA, offset 2). The attributes read as 0x81 and 0x82 and are
+        // written as absolute soft pointers, not with the relative code.
+        let mut m = m;
+        m.insert.attribs = EntityList::Owned(vec![Handle(0x81), Handle(0x82)]);
+        let mut w = ObjWriter::new(Handle(0x80));
+        m.insert.encode_data(&mut w).unwrap();
+        w.data.write_bs(m.columns);
+        w.data.write_bs(m.rows);
+        w.data.write_bd(m.column_spacing);
+        w.data.write_bd(m.row_spacing);
+        put(&mut w, HARD_POINTER, m.insert.block).unwrap();
+        w.href(crate::handle::HandleRef { code: 6, value: 0 })
+            .unwrap();
+        w.href(crate::handle::HandleRef {
+            code: 0xA,
+            value: 2,
+        })
+        .unwrap();
+        put(&mut w, HARD_OWNER, m.insert.seqend.unwrap()).unwrap();
+        let relative = w.finish(type_code::MINSERT).unwrap();
+        let (mut r, _) = ObjReader::split(&relative, Version::R2018, 30).unwrap();
+        r.handle = Handle(0x80);
+        let read = MInsert::decode(&mut r).unwrap();
+        assert_eq!(read, m);
+        assert!(read.read_attrib_code.get().is_none());
+        let written = encode(&read);
+        assert_eq!(attrib_codes(&written), [SOFT_POINTER; 2]);
+        let (mut r, _) = ObjReader::split(&written, Version::R2018, 30).unwrap();
+        r.handle = Handle(0x80);
+        assert_eq!(
+            MInsert::decode(&mut r).unwrap().insert.attribs,
+            m.insert.attribs
+        );
     }
 
     #[test]

@@ -785,6 +785,14 @@ impl Drawing {
             Some(Object::Other {
                 object: NonGraphical::BlockRecord(b),
                 ..
+            }) if b.is_xref || b.xref_overlaid => Err(invalid(
+                Some(block),
+                "an xref or overlay block's entities are in the referenced file; it cannot \
+                 own entities",
+            )),
+            Some(Object::Other {
+                object: NonGraphical::BlockRecord(b),
+                ..
             }) => match b.entities {
                 EntityList::Owned(_) => Ok(()),
                 EntityList::Linked { .. } => Err(invalid(
@@ -824,8 +832,8 @@ impl Drawing {
     /// new ACAD_TABLE, are not added to it here). An ATTDEF sets its block's
     /// `has_attdefs`.
     ///
-    /// Refused ([`Error::Invalid`]) for a `block` that is not a block record
-    /// or whose R2000 list was not built, for entities owned by other
+    /// Refused ([`Error::Invalid`]) for a `block` that is not a block record,
+    /// is an xref or overlay block, or whose R2000 list was not built, for entities owned by other
     /// entities (BLOCK, ENDBLK, SEQEND, ATTRIB, VERTEX), for an insert with
     /// attributes or a polyline with vertices (see
     /// [`Drawing::add_insert_with_attribs`] and [`Drawing::add_polyline`];

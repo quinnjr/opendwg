@@ -792,7 +792,80 @@ impl Drawing {
         self.refresh_attdef_flags(&mut changes);
         self.refresh_plot_views(&mut changes);
         self.refresh_null_owners(&mut changes);
+        self.refresh_entity_owners(&mut changes);
         changes
+    }
+
+    /// The entities exactly one block record lists whose owner (stored, or
+    /// given by the entity mode) is another object, with that block and a
+    /// warning. The list is what AutoCAD draws the entity in; the owner
+    /// only repeats it. An entity listed by two blocks, or by none, is left
+    /// to `validate()`, which refuses it.
+    fn misowned_entities(&self) -> Vec<(Handle, Handle, Diagnostic)> {
+        let mut listers: HashMap<Handle, (Handle, usize)> = HashMap::new();
+        for (&b, obj) in &self.objects {
+            if let Object::Other {
+                object: NonGraphical::BlockRecord(rec),
+                ..
+            } = obj
+            {
+                if let EntityList::Owned(list) = &rec.entities {
+                    for &e in list {
+                        let entry = listers.entry(e).or_insert((b, 0));
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+        let mut out: Vec<(Handle, Handle, Diagnostic)> = listers
+            .into_iter()
+            .filter(|&(e, (b, n))| {
+                n == 1
+                    && matches!(self.objects.get(&e), Some(Object::Entity { .. }))
+                    && self.owner_of(e) != Some(b)
+            })
+            .map(|(e, (b, _))| {
+                let name = |h: Handle| {
+                    self.objects
+                        .get(&h)
+                        .map_or_else(|| h.to_string(), |o| format!("{} {h}", o.type_name()))
+                };
+                let owner = self.owner_of(e).unwrap_or_default();
+                let message = format!(
+                    "{}: its owner is {owner}, but {} lists it among its entities; it is \
+                     written with that block as owner",
+                    name(e),
+                    name(b)
+                );
+                (e, b, warning(Some(e), message))
+            })
+            .collect();
+        out.sort_by_key(|&(e, _, _)| e);
+        out
+    }
+
+    /// Give the entities [`Drawing::misowned_entities`] finds the block that
+    /// lists them as owner (step 2), as `add_entity` places an entity: model
+    /// space and the header's paper space by entity mode, other blocks as
+    /// stored owners.
+    fn refresh_entity_owners(&self, changes: &mut Changes) {
+        let model = self.model_space();
+        let paper = self.header.block_record_paper_space;
+        for (e, block, w) in self.misowned_entities() {
+            if let Some(Object::Entity { common, .. }) = changes.edit(self, e) {
+                let (entmode, owner) = if block == model {
+                    (2, Handle(0))
+                } else if block == paper {
+                    (1, Handle(0))
+                } else {
+                    (0, block)
+                };
+                common.entmode = entmode;
+                common.obj.owner = owner;
+                common.obj.owner_relative = false;
+                changes.warnings.push(w);
+            }
+        }
     }
 
     /// The objects listed as owned that store a null owner, with their
@@ -838,9 +911,13 @@ impl Drawing {
         out
     }
 
-    /// Set the null owners [`Drawing::null_owners`] finds (step 2).
+    /// Set the null owners [`Drawing::null_owners`] finds (step 2), but not
+    /// to a lister the writer leaves out.
     fn refresh_null_owners(&self, changes: &mut Changes) {
         for (child, owner, w) in self.null_owners() {
+            if changes.dropped.contains(&owner) {
+                continue;
+            }
             if let Some(obj) = changes.edit(self, child) {
                 obj.object_common_mut().owner = owner;
                 changes.warnings.push(w);
