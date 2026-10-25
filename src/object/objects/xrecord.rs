@@ -5,6 +5,7 @@ use crate::error::encode_error as encode_err;
 use crate::handle::{Handle, HandleRef};
 use crate::object::common::AsRead;
 use crate::object::entities::dim::{check_fits, count, write_count};
+use crate::object::raw::{HandleTail, trailing_refs};
 use crate::object::stream::{ObjReader, ObjWriter};
 use crate::strings;
 use crate::version::Version;
@@ -153,6 +154,10 @@ pub struct XRecord {
     /// The object ids after the common references, kept as stored ("as many
     /// as you can read until you run out of data").
     pub object_ids: Vec<HandleRef>,
+    /// Handle stream bits after the last reference that do not parse as
+    /// one, kept as stored (see [`crate::object::HandleTail`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub handle_tail: HandleTail,
     /// The version the record was read from (see [`XRecord::is_convertible`]).
     #[cfg_attr(feature = "serde", serde(skip))]
     pub read_version: AsRead<Version>,
@@ -347,14 +352,12 @@ impl XRecord {
             });
         }
         let cloning = r.data.read_bs()?;
-        let mut object_ids = Vec::new();
-        while r.handles.remaining_bits() >= 8 {
-            object_ids.push(r.href()?);
-        }
+        let (object_ids, handle_tail) = trailing_refs(r)?;
         Ok(XRecord {
             items,
             cloning,
             object_ids,
+            handle_tail,
             read_version: AsRead::new(r.version),
         })
     }
@@ -384,7 +387,7 @@ impl XRecord {
         for &h in &self.object_ids {
             w.href(h)?;
         }
-        Ok(())
+        self.handle_tail.write(w)
     }
 }
 
@@ -529,6 +532,7 @@ pub(crate) mod tests {
             ],
             cloning: 1,
             object_ids: vec![],
+            handle_tail: HandleTail::default(),
             read_version: Default::default(),
         }
     }

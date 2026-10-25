@@ -1219,6 +1219,7 @@ fn tile_record() -> NonGraphical {
         items: vec![(270, XRecordValue::Int16(1)), (271, XRecordValue::Int16(1))],
         cloning: 1,
         object_ids: Vec::new(),
+        handle_tail: Default::default(),
         read_version: AsRead::default(),
     })
 }

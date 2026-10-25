@@ -221,6 +221,7 @@ mod tests {
                     strings: None,
                 },
                 handles: vec![],
+                handle_tail: Default::default(),
                 source_version: Version::R2018,
             })),
             N::SpatialFilter(SpatialFilter {
@@ -230,6 +231,7 @@ mod tests {
                     strings: None,
                 },
                 handles: vec![],
+                handle_tail: Default::default(),
             }),
             N::Material(Box::new(render::tests::material())),
             N::VisualStyle(Box::new(render::tests::visual_style())),

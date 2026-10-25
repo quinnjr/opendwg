@@ -27,7 +27,7 @@
 //! ACAD_PROXY_ENTITY, ACIS silhouettes and an image clip type other than 1.
 //! They follow ODS.
 
-use super::super::raw::{take_bits, take_rest};
+use super::super::raw::{HandleTail, take_bits, take_rest, trailing_refs};
 use super::super::stream::{ObjReader, ObjWriter};
 use super::super::tables::{HARD_OWNER, HARD_POINTER, SOFT_POINTER, put};
 use super::dim::{MIN_3BD, check_handles, corrupt, count, read_count, write_count};
@@ -966,6 +966,10 @@ pub struct ProxyEntity {
     /// The object ids: every reference left in the handle stream, kept as
     /// stored.
     pub object_ids: Vec<HandleRef>,
+    /// Handle stream bits after the last reference that do not parse as
+    /// one, kept as stored (see [`crate::object::HandleTail`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub handle_tail: HandleTail,
 }
 
 impl ProxyEntity {
@@ -984,10 +988,7 @@ impl ProxyEntity {
             Some(s) => Some(take_rest(s)?).filter(|(_, bits)| *bits > 0),
             None => None,
         };
-        let mut object_ids = Vec::new();
-        while r.handles.remaining_bits() >= 8 {
-            object_ids.push(r.href()?);
-        }
+        let (object_ids, handle_tail) = trailing_refs(r)?;
         Ok(ProxyEntity {
             class_id,
             version,
@@ -997,6 +998,7 @@ impl ProxyEntity {
             data_bits,
             strings,
             object_ids,
+            handle_tail,
         })
     }
 
@@ -1012,7 +1014,7 @@ impl ProxyEntity {
         for &h in &self.object_ids {
             w.href(h)?;
         }
-        Ok(())
+        self.handle_tail.write(w)
     }
 }
 
@@ -1171,6 +1173,7 @@ pub(crate) mod tests {
                     value: 0x1234,
                 },
             ],
+            handle_tail: HandleTail::default(),
         }
     }
 
@@ -1647,7 +1650,8 @@ pub(crate) mod tests {
         }
     }
 
-    /// A proxy whose references run past the handle stream fails cleanly.
+    /// A proxy cut short fails cleanly; one whose last reference runs past
+    /// the handle stream keeps its bits.
     #[test]
     fn proxy_truncated() {
         let p = proxy();
@@ -1663,14 +1667,14 @@ pub(crate) mod tests {
         let mut r = reader(&bytes);
         r.data.limit_remaining(3);
         assert!(ProxyEntity::decode(&mut r).is_err());
-        // A reference cut in half.
+        // A reference cut in half ends the list; its bits are kept.
         let mut r = reader(&bytes);
         let n = r.handles.remaining_bits();
         r.handles.limit_remaining(n - 12);
-        assert!(matches!(
-            ProxyEntity::decode(&mut r),
-            Err(Error::Truncated { .. })
-        ));
+        let back = ProxyEntity::decode(&mut r).unwrap();
+        assert_eq!(back.object_ids, p.object_ids[..p.object_ids.len() - 1]);
+        assert!(back.handle_tail.bits >= 8, "{:?}", back.handle_tail);
+        assert_eq!(r.handles.remaining_bits(), 0);
     }
 
     /// The OLE data length is checked against the data left.

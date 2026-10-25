@@ -7,7 +7,7 @@ use crate::handle::{Handle, HandleRef};
 use crate::object::entities::dim::{
     MIN_BL, check_fits, check_handles, corrupt, read_count, write_count,
 };
-use crate::object::raw::take_rest;
+use crate::object::raw::{HandleTail, take_rest, trailing_refs};
 use crate::object::stream::{ObjReader, ObjWriter};
 use crate::object::tables::{HARD_POINTER, SOFT_POINTER, handle_count, put};
 use crate::version::Version;
@@ -182,15 +182,6 @@ impl OpaqueBits {
     }
 }
 
-/// Every reference left in the handle stream, kept as stored.
-fn rest_handles(r: &mut ObjReader) -> Result<Vec<HandleRef>> {
-    let mut out = Vec::new();
-    while r.handles.remaining_bits() >= 8 {
-        out.push(r.href()?);
-    }
-    Ok(out)
-}
-
 /// A spatial filter (ODS 20.4.94, SPATIAL_FILTER), the clip boundary of an
 /// xref or block reference. Kept typed-opaque: its data bits as stored
 /// (they have no text, so they are the same in every version) and any
@@ -201,14 +192,20 @@ fn rest_handles(r: &mut ObjReader) -> Result<Vec<HandleRef>> {
 pub struct SpatialFilter {
     pub bits: OpaqueBits,
     pub handles: Vec<HandleRef>,
+    /// Handle stream bits after the last reference that do not parse as
+    /// one, kept as stored (see [`crate::object::HandleTail`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub handle_tail: HandleTail,
 }
 
 impl SpatialFilter {
     pub(crate) fn decode(r: &mut ObjReader) -> Result<Self> {
         let bits = OpaqueBits::take(r)?;
+        let (handles, handle_tail) = trailing_refs(r)?;
         Ok(SpatialFilter {
             bits,
-            handles: rest_handles(r)?,
+            handles,
+            handle_tail,
         })
     }
 
@@ -217,7 +214,7 @@ impl SpatialFilter {
         for &h in &self.handles {
             w.href(h)?;
         }
-        Ok(())
+        self.handle_tail.write(w)
     }
 }
 
@@ -231,6 +228,10 @@ pub struct SpatialIndex {
     pub timestamps: [i32; 2],
     pub bits: OpaqueBits,
     pub handles: Vec<HandleRef>,
+    /// Handle stream bits after the last reference that do not parse as
+    /// one, kept as stored (see [`crate::object::HandleTail`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub handle_tail: HandleTail,
     /// The version the bits were read from. Bits of unknown layout are only
     /// written into R2018 from R2007 up, which share the stream layout (see
     /// [`SpatialIndex::is_convertible`]).
@@ -241,10 +242,12 @@ impl SpatialIndex {
     pub(crate) fn decode(r: &mut ObjReader) -> Result<Self> {
         let timestamps = [r.data.read_bl()?, r.data.read_bl()?];
         let bits = OpaqueBits::take(r)?;
+        let (handles, handle_tail) = trailing_refs(r)?;
         Ok(SpatialIndex {
             timestamps,
             bits,
-            handles: rest_handles(r)?,
+            handles,
+            handle_tail,
             source_version: r.version,
         })
     }
@@ -266,7 +269,7 @@ impl SpatialIndex {
         for &h in &self.handles {
             w.href(h)?;
         }
-        Ok(())
+        self.handle_tail.write(w)
     }
 }
 

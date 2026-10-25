@@ -1,7 +1,7 @@
 //! Objects of types the library does not decode, kept as bits.
 
 use super::remap::{Mapper, clears_offset, rewrite_ref};
-use super::stream::ObjReader;
+use super::stream::{ObjReader, ObjWriter};
 use crate::bits::BitReader;
 use crate::error::Result;
 use crate::handle::{Handle, HandleRef};
@@ -135,6 +135,48 @@ pub struct UnreadableObject {
 }
 
 /// The remaining bits of `r`, MSB-first and zero-padded, and their count.
+/// Handle stream bits after the last reference that are not end padding: a
+/// reference that does not parse (its counter runs past the stream's end).
+/// A decoder that reads references to the end of the stream keeps them as
+/// stored, with the end padding after them, so the object is written back
+/// as read; empty when every reference parsed.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct HandleTail {
+    /// MSB-first, zero-padded.
+    pub bytes: Vec<u8>,
+    /// How many bits of `bytes` are real.
+    pub bits: u64,
+}
+
+impl HandleTail {
+    /// Write the kept bits to the handle stream.
+    pub(crate) fn write(&self, w: &mut ObjWriter) -> Result<()> {
+        w.handle_stream().write_bits_from(&self.bytes, self.bits)
+    }
+}
+
+/// Every reference left in `r`'s handle stream, read as
+/// [`RawObject::decode`] reads them: a reference that does not parse stops
+/// the list, and the bits from it on are kept ([`HandleTail`]) rather than
+/// failing the object's decode. Fewer than 8 bits left are end padding and
+/// stay unread.
+pub(crate) fn trailing_refs(r: &mut ObjReader) -> Result<(Vec<HandleRef>, HandleTail)> {
+    let mut out = Vec::new();
+    while r.handles.remaining_bits() >= 8 {
+        let at = r.handles.bit_pos();
+        match r.handles.read_handle_ref() {
+            Ok(h) => out.push(h),
+            Err(_) => {
+                r.handles.seek_bit(at)?;
+                let (bytes, bits) = take_rest(&mut r.handles)?;
+                return Ok((out, HandleTail { bytes, bits }));
+            }
+        }
+    }
+    Ok((out, HandleTail::default()))
+}
+
 pub(crate) fn take_rest(r: &mut BitReader) -> Result<(Vec<u8>, u64)> {
     let bits = r.remaining_bits();
     Ok((take_bits(r, bits)?, bits))

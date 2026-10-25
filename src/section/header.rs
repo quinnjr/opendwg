@@ -1008,6 +1008,10 @@ fn walk(io: &mut impl Io, h: &mut HeaderVars, d: &HeaderVars) -> Result<()> {
 struct Reader<'a> {
     r: ObjReader<'a>,
     tail: bool,
+    /// The handle references read so far.
+    handles: usize,
+    /// Those stored with a relative code (index in [`walk`] order, code).
+    relative: Vec<(usize, u8)>,
 }
 
 impl<'a> Reader<'a> {
@@ -1094,15 +1098,18 @@ impl Io for Reader<'_> {
             &mut self.r.data
         };
         let r = stream.read_handle_ref()?;
+        let at = self.handles;
+        self.handles += 1;
         // The header has no handle of its own, so relative codes (6 and up)
-        // have no base. Every corpus header uses exactly the ODS codes; other
-        // absolute codes are accepted, and writing uses the ODS code.
+        // have no base: the variable is read as null, with a warning naming
+        // it (see `decode_with_diagnostics`). Every corpus header uses
+        // exactly the ODS codes; other absolute codes are accepted, and
+        // writing uses the ODS code.
         let _ = code;
         if r.code > 5 {
-            return Err(corrupt(&format!(
-                "relative handle reference (code {})",
-                r.code
-            )));
+            self.relative.push((at, r.code));
+            *v = Handle(0);
+            return Ok(());
         }
         *v = resolve(r, Handle(0))?;
         Ok(())
@@ -1191,9 +1198,15 @@ pub fn decode_with_diagnostics(
         let empty = BitReader::new(&[]);
         ObjReader::from_streams(BitReader::new(body), None, empty, version, codepage)
     };
-    let mut io = Reader { r, tail: false };
+    let mut io = Reader {
+        r,
+        tail: false,
+        handles: 0,
+        relative: Vec::new(),
+    };
     let mut vars = HeaderVars::default();
     walk(&mut io, &mut vars, &HeaderVars::default())?;
+    let relative = std::mem::take(&mut io.relative);
     let r = io.r;
     let unread = if version >= Version::R2007 {
         UnreadBits {
@@ -1213,6 +1226,20 @@ pub fn decode_with_diagnostics(
     // header has none.
     for d in &mut diagnostics {
         d.handle = None;
+    }
+    if !relative.is_empty() {
+        let names = handle_var_names(&vars, version);
+        for (at, code) in relative {
+            let name = names.get(at).copied().unwrap_or("a handle variable");
+            diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                handle: None,
+                message: format!(
+                    "header: {name} is stored as a relative handle reference (code {code}), \
+                     which the header (having no handle) cannot resolve; it is read as null"
+                ),
+            });
+        }
     }
     if !unread.is_exact() {
         diagnostics.push(Diagnostic {
@@ -1239,6 +1266,11 @@ struct Writer {
     tail: bool,
     /// Leave the tail out (tests: a header as civilcraft writes it).
     omit_tail: bool,
+    /// Write the handle reference of this index (in [`walk`] order) with
+    /// the relative code 6 (tests: a header no reader can resolve).
+    relative_at: Option<usize>,
+    /// The handle references written so far.
+    handles: usize,
 }
 
 impl Writer {
@@ -1301,6 +1333,11 @@ impl Io for Writer {
         self.w.write_cmc(v)
     }
     fn h(&mut self, v: &mut Handle, code: u8) -> Result<()> {
+        let at = self.handles;
+        self.handles += 1;
+        if self.relative_at == Some(at) {
+            return self.w.href(HandleRef { code: 6, value: 0 });
+        }
         self.w.href(HandleRef { code, value: v.0 })
     }
     fn seed(&mut self, v: &mut Handle) -> Result<()> {
@@ -1355,6 +1392,68 @@ impl Io for NoIo {
     fn seed(&mut self, _: &mut Handle) -> Result<()> {
         Ok(())
     }
+}
+
+/// The names of the handle variables of `h` (as read, for `version`) in
+/// [`walk`] order: walked once more with each handle numbered, the numbers
+/// are looked up in [`handle_vars`].
+fn handle_var_names(h: &HeaderVars, version: Version) -> Vec<&'static str> {
+    struct Numbering(Version, u64);
+    impl Io for Numbering {
+        fn version(&self) -> Version {
+            self.0
+        }
+        fn b(&mut self, _: &mut bool) -> Result<()> {
+            Ok(())
+        }
+        fn bs(&mut self, _: &mut i16) -> Result<()> {
+            Ok(())
+        }
+        fn bl(&mut self, _: &mut i32) -> Result<()> {
+            Ok(())
+        }
+        fn bll(&mut self, _: &mut u64) -> Result<()> {
+            Ok(())
+        }
+        fn bd(&mut self, _: &mut f64) -> Result<()> {
+            Ok(())
+        }
+        fn rc(&mut self, _: &mut u8) -> Result<()> {
+            Ok(())
+        }
+        fn rd2(&mut self, _: &mut [f64; 2]) -> Result<()> {
+            Ok(())
+        }
+        fn bd3(&mut self, _: &mut [f64; 3]) -> Result<()> {
+            Ok(())
+        }
+        fn tv(&mut self, _: &mut String) -> Result<()> {
+            Ok(())
+        }
+        fn cmc(&mut self, _: &mut Color) -> Result<()> {
+            Ok(())
+        }
+        fn h(&mut self, v: &mut Handle, _: u8) -> Result<()> {
+            self.1 += 1;
+            *v = Handle(self.1);
+            Ok(())
+        }
+        fn seed(&mut self, _: &mut Handle) -> Result<()> {
+            Ok(())
+        }
+    }
+    let mut numbered = h.clone();
+    let mut io = Numbering(version, 0);
+    if walk(&mut io, &mut numbered, &HeaderVars::default()).is_err() {
+        return Vec::new();
+    }
+    let by_number: std::collections::HashMap<u64, &'static str> = handle_vars(&numbered)
+        .into_iter()
+        .map(|(name, v)| (v.0, name))
+        .collect();
+    (1..=io.1)
+        .map(|n| by_number.get(&n).copied().unwrap_or("a handle variable"))
+        .collect()
 }
 
 /// The handle variables, named, that point at an object: every handle
@@ -1506,16 +1605,19 @@ impl HeaderVars {
 /// Fields R2018 stores but `h` lacks take their [`defaults_r2018`] value (see
 /// [`HeaderVars::to_r2018`]).
 pub fn encode_r2018(h: &HeaderVars) -> Result<Vec<u8>> {
-    encode(h, false)
+    encode(h, false, None)
 }
 
-/// [`encode_r2018`], leaving the tail out when `omit_tail`.
-fn encode(h: &HeaderVars, omit_tail: bool) -> Result<Vec<u8>> {
+/// [`encode_r2018`], leaving the tail out when `omit_tail`, writing handle
+/// reference `relative_at` with a relative code.
+fn encode(h: &HeaderVars, omit_tail: bool, relative_at: Option<usize>) -> Result<Vec<u8>> {
     let mut h = h.clone();
     let mut io = Writer {
         w: ObjWriter::new(Handle(0)),
         tail: false,
         omit_tail,
+        relative_at,
+        handles: 0,
     };
     walk(&mut io, &mut h, &defaults_r2018())?;
     let mut main = BitWriter::new();
@@ -2005,7 +2107,7 @@ mod tests {
         let mut h = defaults_r2018();
         h.handseed = Handle(0x2A);
         h.clayer = Handle(0x10);
-        let bytes = encode(&h, true).unwrap();
+        let bytes = encode(&h, true, None).unwrap();
         let d = decode_with_diagnostics(&bytes, Version::R2018, 30).unwrap();
         assert_eq!(d.vars.clayer, Handle(0x10));
         assert_eq!(d.vars.unknown.unknown_bs1, 0);
@@ -2019,6 +2121,29 @@ mod tests {
         // The full header still decodes with no warning.
         let full = decode_with_diagnostics(&encode_r2018(&h).unwrap(), Version::R2018, 30).unwrap();
         assert!(full.diagnostics.is_empty(), "{:?}", full.diagnostics);
+    }
+
+    /// A handle variable stored with a relative code (which the header,
+    /// having no handle, cannot resolve) reads as null with a warning naming
+    /// it; the rest of the header still reads.
+    #[test]
+    fn relative_header_handle_is_null_with_a_warning() {
+        let mut h = defaults_r2018();
+        h.handseed = Handle(0x2A);
+        h.clayer = Handle(0x10);
+        h.textstyle = Handle(0x11);
+        // $CLAYER is the first handle variable of the R2018 header.
+        let bytes = encode(&h, false, Some(0)).unwrap();
+        let d = decode_with_diagnostics(&bytes, Version::R2018, 30).unwrap();
+        assert_eq!(d.vars.clayer, Handle(0));
+        assert_eq!(d.vars.textstyle, Handle(0x11));
+        assert_eq!(d.diagnostics.len(), 1, "{:?}", d.diagnostics);
+        assert_eq!(d.diagnostics[0].severity, Severity::Warning);
+        assert!(
+            d.diagnostics[0].message.contains("$CLAYER"),
+            "{}",
+            d.diagnostics[0].message
+        );
     }
 
     #[test]
