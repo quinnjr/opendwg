@@ -25,9 +25,10 @@
 //! - A WIPEOUT, which ODS does not describe, is laid out as an IMAGE, as
 //!   ACadSharp `readCadImage` reads both.
 //!
-//! Unconfirmed by the corpus, which has none: BODY, OLE2FRAME,
-//! ACAD_PROXY_ENTITY, ACIS silhouettes and an image clip type other than 1.
-//! They follow ODS.
+//! Unconfirmed by the corpus, which has none: OLE2FRAME, ACAD_PROXY_ENTITY,
+//! ACIS silhouettes and an image clip type other than 1. They follow ODS.
+//! BODY is in the extended corpus only as the ODA SDK writes it (`cc-11`,
+//! R2018, and `cc-10`, R2000): no AutoCAD-written BODY confirms its layout.
 
 use super::super::raw::{HandleTail, take_bits, take_rest, trailing_refs};
 use super::super::stream::{ObjReader, ObjWriter};

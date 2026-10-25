@@ -85,7 +85,12 @@ Writing never drops data silently. What it cannot carry over (an unknown
 section of an old file, a damaged preview, ...) is left out with a warning:
 `Drawing::to_bytes_with_diagnostics` and `Drawing::save_with_diagnostics`
 return those warnings with the file, and `Drawing::write_diagnostics` lists
-them before saving. `to_bytes` and `save` write the same file without them. `Drawing::validate` checks ownership,
+them before saving. `to_bytes` and `save` write the same file without them.
+The writer also adds what AutoCAD requires and other programs' files lack
+(the dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
+dictionaries), sets a null owner to the object that lists it, and gives an
+entity the block that lists it as owner, each with a warning; the drawing
+itself is not changed. `Drawing::validate` checks ownership,
 references, handles and required tables; the writer runs it before every
 save. `Drawing::remove` refuses to delete an object something still refers
 to (`Error::InUse`).

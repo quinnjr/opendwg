@@ -6,12 +6,15 @@
 //!
 //! - the dimension style `Standard` (BricsCAD, SolidWorks, Teigha and
 //!   GDAL's R2000 files of the extended corpus have none): the header's
-//!   dimension variables, as [`Drawing::new`] makes it, with the text style
-//!   `Standard` (or `$TEXTSTYLE`);
+//!   dimension variables, as [`Drawing::new`] makes it, with the header's
+//!   dimension text style, arrow blocks and linetypes when they name an
+//!   object of their kind (else the text style `Standard` or `$TEXTSTYLE`,
+//!   and the defaults);
 //! - the named object dictionary's `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
 //!   dictionaries (civilcraft's own writer leaves `ACAD_PLOTSETTINGS` out):
 //!   empty, as AutoCAD creates them, and named by `$DICT_PLOTSETTINGS` /
-//!   `$DICT_ACAD_GROUP` when those name no dictionary.
+//!   `$DICT_ACAD_GROUP` (which, naming another dictionary the named object
+//!   dictionary does not list, would disagree with it).
 //!
 //! The additions are made on a copy, which the writer validates and writes
 //! in place of the drawing: the drawing itself is not changed. Each one is a
@@ -25,7 +28,7 @@ use super::api::names_eq;
 use super::new::dim_style;
 use crate::diag::{Diagnostic, Severity};
 use crate::handle::Handle;
-use crate::object::{Dictionary, NonGraphical, Object, TableKind};
+use crate::object::{Dictionary, DimStyle, NonGraphical, Object, TableKind};
 
 /// The named object dictionary entries the writer creates empty.
 const EMPTY_NAMED_DICTIONARIES: [&str; 2] = ["ACAD_GROUP", "ACAD_PLOTSETTINGS"];
@@ -55,7 +58,8 @@ impl Drawing {
         let mut warnings = Vec::new();
         if standard {
             let text_style = d.current_text_style().unwrap_or_default();
-            let style = dim_style("Standard", &d.header, text_style);
+            let mut style = dim_style("Standard", &d.header, text_style);
+            d.header_dim_handles(&mut style);
             if let Ok(h) = d.add_dim_style(style) {
                 warnings.push(warning(format!(
                     "the drawing has no dimension style \"Standard\" (AutoCAD requires it); \
@@ -72,6 +76,44 @@ impl Drawing {
             }
         }
         (!warnings.is_empty()).then_some((d, warnings))
+    }
+
+    /// Give `style` the header's dimension handles that name an object of
+    /// the right kind: `$DIMTXSTY` (a text style), the arrow blocks
+    /// (`$DIMLDRBLK`, `$DIMBLK`, `$DIMBLK1`, `$DIMBLK2`: block records) and
+    /// the linetypes (`$DIMLTYPE`, `$DIMLTEX1`, `$DIMLTEX2`). Others keep
+    /// the defaults.
+    fn header_dim_handles(&self, style: &mut DimStyle) {
+        let is = |h: Handle, f: fn(&NonGraphical) -> bool| {
+            h.0 != 0
+                && matches!(self.objects.get(&h), Some(Object::Other { object, .. }) if f(object))
+        };
+        let text = |o: &NonGraphical| matches!(o, NonGraphical::TextStyle(_));
+        let block = |o: &NonGraphical| matches!(o, NonGraphical::BlockRecord(_));
+        let linetype = |o: &NonGraphical| matches!(o, NonGraphical::Linetype(_));
+        let h = &self.header;
+        if is(h.dimtxsty, text) {
+            style.dimtxsty = h.dimtxsty;
+        }
+        for (from, to) in [
+            (h.dimldrblk, &mut style.dimldrblk),
+            (h.dimblk, &mut style.dimblk),
+            (h.dimblk1, &mut style.dimblk1),
+            (h.dimblk2, &mut style.dimblk2),
+        ] {
+            if is(from, block) {
+                *to = from;
+            }
+        }
+        for (from, to) in [
+            (h.dimltype, &mut style.dimltype),
+            (h.dimltex1, &mut style.dimltex1),
+            (h.dimltex2, &mut style.dimltex2),
+        ] {
+            if let Some(from) = from.filter(|&x| is(x, linetype)) {
+                *to = from;
+            }
+        }
     }
 
     /// Whether the DIMSTYLE table exists and has no record `Standard`.
@@ -107,7 +149,7 @@ impl Drawing {
 
     /// Add the empty dictionary `name` to the named object dictionary, its
     /// entries kept in byte order when they were, and point the header
-    /// variable for it at the new dictionary when that names none.
+    /// variable for it at the new dictionary.
     fn add_named_dictionary(&mut self, name: &str) -> Option<Handle> {
         let nod = self.header.dict_named_objects;
         let empty = Dictionary {
@@ -132,24 +174,11 @@ impl Drawing {
                 d.entries.insert(at, entry);
             }
         }
-        let is_dictionary = |d: &Drawing, x: Handle| {
-            matches!(
-                d.objects.get(&x),
-                Some(Object::Other {
-                    object: NonGraphical::Dictionary(_) | NonGraphical::DictionaryWithDefault(_),
-                    ..
-                })
-            )
-        };
-        let current = match name {
-            "ACAD_GROUP" => self.header.dict_acad_group,
-            _ => self.header.dict_plotsettings,
-        };
-        if !is_dictionary(self, current) {
-            match name {
-                "ACAD_GROUP" => self.header.dict_acad_group = h,
-                _ => self.header.dict_plotsettings = h,
-            }
+        // The header variable names the dictionary the named object
+        // dictionary lists, so the two never disagree.
+        match name {
+            "ACAD_GROUP" => self.header.dict_acad_group = h,
+            _ => self.header.dict_plotsettings = h,
         }
         Some(h)
     }
@@ -201,6 +230,72 @@ mod tests {
         assert!(back.dim_styles().any(|(_, s)| s.entry.name == "Standard"));
         assert!(back.dim_styles().any(|(_, s)| s.entry.name == "ISO-25"));
         assert!(back.validate().is_empty(), "{:?}", back.validate());
+    }
+
+    /// The added `Standard` dimension style takes the header's dimension
+    /// text style, arrow block and linetype when they name objects of their
+    /// kind, and the defaults for those that name none.
+    #[test]
+    fn added_standard_dim_style_takes_the_header_handles() {
+        let mut d = Drawing::new();
+        let standard = d
+            .dim_styles()
+            .find(|(_, s)| s.entry.name == "Standard")
+            .map(|(h, _)| h)
+            .unwrap();
+        if let Some(Object::Other {
+            object: NonGraphical::DimStyle(s),
+            ..
+        }) = d.objects.get_mut(&standard)
+        {
+            s.entry.name = "ISO-25".into();
+        }
+        let arrow = d.add_block("_ARROW").unwrap();
+        let mut style = d.text_styles().next().unwrap().1.clone();
+        style.entry.name = "DimText".into();
+        let text = d.add_text_style(style).unwrap();
+        d.header.dimblk = arrow;
+        d.header.dimtxsty = text;
+        d.header.dimblk1 = Handle(0); // none: the default stays
+        let back = Drawing::from_bytes(&d.to_bytes().unwrap()).unwrap();
+        let (_, s) = back
+            .dim_styles()
+            .find(|(_, s)| s.entry.name == "Standard")
+            .unwrap();
+        assert_eq!((s.dimblk, s.dimtxsty, s.dimblk1), (arrow, text, Handle(0)));
+    }
+
+    /// `$DICT_PLOTSETTINGS` naming a dictionary the named object dictionary
+    /// does not list under `ACAD_PLOTSETTINGS` is pointed at the one added,
+    /// so the two agree.
+    #[test]
+    fn plot_settings_variable_follows_the_added_dictionary() {
+        let mut d = Drawing::new();
+        let nod = d.header.dict_named_objects;
+        if let Some(Object::Other {
+            object: NonGraphical::Dictionary(n),
+            ..
+        }) = d.objects.get_mut(&nod)
+        {
+            n.entries.retain(|(name, _)| name != "ACAD_PLOTSETTINGS");
+        }
+        let other = d.header.dict_plotsettings;
+        d.ref_index = Default::default();
+        let back = Drawing::from_bytes(&d.to_bytes().unwrap()).unwrap();
+        let Some(Object::Other {
+            object: NonGraphical::Dictionary(n),
+            ..
+        }) = back.objects.get(&nod)
+        else {
+            panic!("the named object dictionary");
+        };
+        let (_, listed) = n
+            .entries
+            .iter()
+            .find(|(n, _)| n == "ACAD_PLOTSETTINGS")
+            .unwrap();
+        assert_ne!(*listed, other);
+        assert_eq!(back.header.dict_plotsettings, *listed);
     }
 
     /// A named object dictionary without `ACAD_PLOTSETTINGS` (civilcraft's

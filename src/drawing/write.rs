@@ -482,8 +482,12 @@ impl Drawing {
         let mut diags = std::mem::take(&mut changes.warnings);
         if dry_run {
             let written = self.objects.len() - changes.dropped.len();
-            let (_, _, _, _, warnings) = self.sections(saved, written)?;
-            diags.extend(warnings);
+            // A layout that fails is one more warning: those found so far
+            // are kept.
+            match self.sections(saved, written) {
+                Ok((_, _, _, _, warnings)) => diags.extend(warnings),
+                Err(e) => diags.push(warning(None, format!("the file cannot be laid out: {e}"))),
+            }
             return Ok((Vec::new(), diags));
         }
         let invalid: Vec<Diagnostic> = self
@@ -2859,6 +2863,31 @@ mod tests {
         assert_eq!(back.get(states).unwrap().object_common().owner, xdict);
         assert!(back.validate().is_empty(), "{:#?}", back.validate());
         assert_eq!(d.get(xdict).unwrap().object_common().owner, Handle(0));
+    }
+
+    /// When the file cannot be laid out (a summary title too long to
+    /// encode), `write_diagnostics` still lists the warnings found before,
+    /// with one more for the layout.
+    #[test]
+    fn layout_failure_keeps_earlier_warnings() {
+        let mut d = Drawing::new();
+        let layers = d.header.layer_control;
+        let xdict = d.get(layers).unwrap().object_common().xdict.unwrap();
+        d.get_mut(xdict).unwrap().object_common_mut().owner = Handle(0);
+        let mut summary = d.summary.clone().unwrap_or_default();
+        summary.title = "x".repeat(70_000);
+        d.summary = Some(summary);
+        let diags = d.write_diagnostics();
+        assert!(
+            diags.iter().any(|x| x.message.contains("null")),
+            "{diags:#?}"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|x| x.message.contains("cannot be laid out"))
+        );
+        assert!(d.to_bytes().is_err());
     }
 
     #[test]
