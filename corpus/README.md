@@ -14,7 +14,7 @@ have not been fetched.
 
 ## Extended corpus
 
-`extended.toml` lists 135 more real-world files (same schema, plus `producer`, and an optional
+`extended.toml` lists 134 more real-world files (same schema, plus `producer`, and an optional
 `expect.open = "unsupported"` or `expect.unconvertible = true`), fetched by the same script:
 
 - Civil 3D 2020-2025 drawings with AECC objects (`camber-*`, `c3dtk-01`, `rc-03`);
@@ -27,14 +27,15 @@ have not been fetched.
 - large drawings (`rc-01`, 260 000 objects; `adsk-house-01`), Autodesk's own samples (`adsk-*`,
   `arx-*`), ACadSharp's newer samples (dynamic block parameters, geolocation, `sample_base`);
 - negative cases: R14 (`arx-01`, `acadsharp-sample-ac1014`), R13 (`arx-11`), the pre-release
-  "AC402b" (`arx-04`), R12/R10 (`usfs-01/02`) and a DXF file named `.dwg` (`bur-01`).
+  "AC402b" (`arx-04`) and R12/R10 (`usfs-01/02`).
 
 Feature tags were computed with the library from the decoded drawings (objects of each type, xref
 block records, class-numbered raw objects, entities with proxy graphics, non-ASCII strings).
 `tests/extended_corpus.rs` runs every file through open, validate and save.
 
 Left out on licence grounds (third-party content under a repository licence only): GDAL's Mapwize
-building, Aspose's copies of Autodesk samples, and a file a user attached to an ezdxf issue.
+building, Aspose's copies of Autodesk samples, a file a user attached to an ezdxf issue, and an
+architectural plan (a DXF file named `.dwg`) whose repository licence is a site template's.
 
 Remaining gaps: no Shift-JIS, Big5 or Korean file; no R2000 or R2004 Civil 3D file; no Map 3D,
 Plant 3D or MEP objects (no public file under acceptable terms found).

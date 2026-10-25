@@ -1173,18 +1173,6 @@ license_note = "Public domain: a work of the US federal government (USDA Forest 
 open = "unsupported"
 
 [[file]]
-name = "bur-01"
-url = "https://raw.githubusercontent.com/burubur/burubur.github.io/5b75e59df1ea64577cdf73f1a378c5336b473a15/docs/drftr/assets/bd-p5y/architectural_layout_plan.dwg"
-sha256 = "ffd263088a47ee237f3b036b8b449b90417155bb844209264f59a930b97eaff6"
-version = "  0\nSE"
-features = []
-producer = "not a DWG: an ASCII DXF file named .dwg"
-license_note = "0BSD (burubur/burubur.github.io); the LICENSE at the repository root, commit 5b75e59df1ea"
-
-[file.expect]
-open = "unsupported"
-
-[[file]]
 name = "acadsharp-dynblock-alignment"
 url = "https://raw.githubusercontent.com/DomCR/ACadSharp/29137f3adaf75ddebd532179eda1e811525ca574/samples/dynamic-blocks/BLOCKALIGNMENTPARAMETER.dwg"
 sha256 = "d7aa1418c6ed4af5930b6ea1b45a8343803b64b3985ceb188edf8cabb6e80c92"

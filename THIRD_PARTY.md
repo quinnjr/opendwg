@@ -280,7 +280,7 @@ licence; the sources:
   Platform Services / 2024 Madhukar Moogala): Autodesk sample drawings.
 - chuongmep/CadPythonShell and chuongmep/OpenMEP (MIT), KubaSzostak/Geo7 (MIT, Copyright (c) 2015
   Kuba Szostak), qinchuan1122/cad-dwg-reader (MIT), backkem/codecad (MIT, Copyright (c) 2025
-  CodeCAD contributors), burubur/burubur.github.io (0BSD).
+  CodeCAD contributors).
 - DomCR/ACadSharp at commit `29137f3adaf75ddebd532179eda1e811525ca574` (MIT, Copyright (c) 2021
   Albert Domenech): newer samples (dynamic blocks, geolocation, sample_base, svg, AC1014).
 - USDA Forest Service Engineering AutoCAD Drawing Library: US federal works, public domain

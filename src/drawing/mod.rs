@@ -1770,5 +1770,13 @@ mod tests {
             Drawing::from_bytes(b"AC1014\0\0\0\0"),
             Err(Error::UnsupportedVersion(_))
         ));
+        // An ASCII DXF file named .dwg: not a DWG, refused cleanly.
+        let mut dxf =
+            b"  0\r\nSECTION\r\n  2\r\nHEADER\r\n  9\r\n$ACADVER\r\n  1\r\nAC1015\r\n".to_vec();
+        dxf.extend(b"  0\r\nENDSEC\r\n  0\r\nEOF\r\n".repeat(64));
+        assert!(matches!(
+            Drawing::from_bytes(&dxf),
+            Err(Error::UnsupportedVersion(v)) if v.starts_with("  0")
+        ));
     }
 }

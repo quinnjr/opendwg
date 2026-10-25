@@ -22,9 +22,10 @@ use opendwg::object::{Entity, Object};
 use opendwg::{Drawing, Error, Handle, Severity};
 
 /// Research ids left out: third-party content under a repository licence
-/// (Mapwize, Autodesk samples redistributed by Aspose, a user's file).
-const EXCLUDED: [&str; 6] = [
-    "gdal-01", "asp-01", "asp-03", "asp-13", "asp-16", "ezdxf-05",
+/// (Mapwize, Autodesk samples redistributed by Aspose, a user's file, an
+/// architectural plan in a site template's repository).
+const EXCLUDED: [&str; 7] = [
+    "gdal-01", "asp-01", "asp-03", "asp-13", "asp-16", "ezdxf-05", "bur-01",
 ];
 
 /// Object types the writer leaves out (see `drawing::write`): the R2000
