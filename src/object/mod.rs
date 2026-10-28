@@ -914,67 +914,131 @@ impl Object {
     }
 }
 
-/// The class types [`typed_entity`] decodes, sorted.
-const MODELED_ENTITY_CLASSES: [&str; 9] = [
-    "ACAD_PROXY_ENTITY",
-    "ARC_DIMENSION",
-    "HATCH",
-    "IMAGE",
-    "LARGE_RADIAL_DIMENSION",
-    "LWPOLYLINE",
-    "MULTILEADER",
-    "OLE2FRAME",
-    "WIPEOUT",
+/// A typed decoder of a class type's entities.
+type EntityDecoder = fn(&mut ObjReader) -> Result<Entity>;
+
+/// A typed decoder of a class type's non-graphical objects.
+type ObjectDecoder = fn(&mut ObjReader) -> Result<NonGraphical>;
+
+/// The class types [`typed_entity`] decodes, by DXF name, sorted (for the
+/// binary search): the one list both it and [`is_modeled`] read.
+const ENTITY_CLASSES: [(&str, EntityDecoder); 9] = [
+    ("ACAD_PROXY_ENTITY", |r| {
+        ProxyEntity::decode(r).map(|p| Entity::ProxyEntity(Box::new(p)))
+    }),
+    ("ARC_DIMENSION", |r| {
+        Dimension::decode(r, DimType::ArcLength).map(|d| Entity::Dimension(Box::new(d)))
+    }),
+    ("HATCH", |r| {
+        Hatch::decode(r).map(|h| Entity::Hatch(Box::new(h)))
+    }),
+    ("IMAGE", |r| {
+        Image::decode(r).map(|i| Entity::Image(Box::new(i)))
+    }),
+    ("LARGE_RADIAL_DIMENSION", |r| {
+        Dimension::decode(r, DimType::LargeRadial).map(|d| Entity::Dimension(Box::new(d)))
+    }),
+    ("LWPOLYLINE", |r| {
+        LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)))
+    }),
+    ("MULTILEADER", |r| {
+        MultiLeader::decode(r).map(|m| Entity::MultiLeader(Box::new(m)))
+    }),
+    ("OLE2FRAME", |r| {
+        Ole2Frame::decode(r).map(|o| Entity::Ole2Frame(Box::new(o)))
+    }),
+    ("WIPEOUT", |r| {
+        Image::decode(r).map(|i| Entity::Wipeout(Box::new(i)))
+    }),
 ];
 
-/// The class types [`typed_object`] decodes in R2018 files, sorted.
-const MODELED_OBJECT_CLASSES: [&str; 26] = [
-    "ACAD_PROXY_OBJECT",
-    "ACDBDETAILVIEWSTYLE",
-    "ACDBDICTIONARYWDFLT",
-    "ACDBPLACEHOLDER",
-    "ACDBSECTIONVIEWSTYLE",
-    "DICTIONARY",
-    "DICTIONARYVAR",
-    "DICTIONARYWDFLT",
-    "GROUP",
-    "IMAGEDEF",
-    "IMAGEDEF_REACTOR",
-    "LAYER_INDEX",
-    "LAYOUT",
-    "MATERIAL",
-    "MLEADERSTYLE",
-    "MLINESTYLE",
-    "PLOTSETTINGS",
-    "RASTERVARIABLES",
-    "SCALE",
-    "SORTENTSTABLE",
-    "SPATIAL_FILTER",
-    "SPATIAL_INDEX",
-    "TABLESTYLE",
-    "VISUALSTYLE",
-    "WIPEOUTVARIABLES",
-    "XRECORD",
-];
+/// The class types [`typed_object`] decodes, by DXF name, sorted (for the
+/// binary search): the one list both it and [`is_modeled`] read. Some are
+/// decoded only from a version on, or not when saved in an older layout
+/// (see [`typed_object`]); [`is_modeled`] answers for R2018 files.
+const OBJECT_CLASSES: [(&str, ObjectDecoder); 26] = {
+    use NonGraphical as N;
+    [
+        ("ACAD_PROXY_OBJECT", |r| {
+            ProxyObject::decode(r).map(|p| N::ProxyObject(Box::new(p)))
+        }),
+        ("ACDBDETAILVIEWSTYLE", |r| {
+            DetailViewStyle::decode(r).map(|v| N::DetailViewStyle(Box::new(v)))
+        }),
+        ("ACDBDICTIONARYWDFLT", |r| {
+            DictionaryWithDefault::decode(r).map(N::DictionaryWithDefault)
+        }),
+        ("ACDBPLACEHOLDER", |_| Ok(N::Placeholder)),
+        ("ACDBSECTIONVIEWSTYLE", |r| {
+            SectionViewStyle::decode(r).map(|v| N::SectionViewStyle(Box::new(v)))
+        }),
+        ("DICTIONARY", |r| Dictionary::decode(r).map(N::Dictionary)),
+        ("DICTIONARYVAR", |r| {
+            DictionaryVar::decode(r).map(N::DictionaryVar)
+        }),
+        ("DICTIONARYWDFLT", |r| {
+            DictionaryWithDefault::decode(r).map(N::DictionaryWithDefault)
+        }),
+        ("GROUP", |r| Group::decode(r).map(N::Group)),
+        ("IMAGEDEF", |r| ImageDef::decode(r).map(N::ImageDef)),
+        ("IMAGEDEF_REACTOR", |r| {
+            ImageDefReactor::decode(r).map(N::ImageDefReactor)
+        }),
+        ("LAYER_INDEX", |r| LayerIndex::decode(r).map(N::LayerIndex)),
+        ("LAYOUT", |r| {
+            Layout::decode(r).map(|l| N::Layout(Box::new(l)))
+        }),
+        ("MATERIAL", |r| {
+            Material::decode(r).map(|m| N::Material(Box::new(m)))
+        }),
+        ("MLEADERSTYLE", |r| {
+            MLeaderStyle::decode(r).map(|m| N::MLeaderStyle(Box::new(m)))
+        }),
+        ("MLINESTYLE", |r| MLineStyle::decode(r).map(N::MLineStyle)),
+        ("PLOTSETTINGS", |r| {
+            PlotSettings::decode(r).map(|p| N::PlotSettings(Box::new(p)))
+        }),
+        ("RASTERVARIABLES", |r| {
+            RasterVariables::decode(r).map(N::RasterVariables)
+        }),
+        ("SCALE", |r| Scale::decode(r).map(N::Scale)),
+        ("SORTENTSTABLE", |r| {
+            SortEntsTable::decode(r).map(N::SortEntsTable)
+        }),
+        ("SPATIAL_FILTER", |r| {
+            SpatialFilter::decode(r).map(N::SpatialFilter)
+        }),
+        ("SPATIAL_INDEX", |r| {
+            SpatialIndex::decode(r).map(|s| N::SpatialIndex(Box::new(s)))
+        }),
+        ("TABLESTYLE", |r| TableStyle::decode(r).map(N::TableStyle)),
+        ("VISUALSTYLE", |r| {
+            VisualStyle::decode(r).map(|v| N::VisualStyle(Box::new(v)))
+        }),
+        ("WIPEOUTVARIABLES", |r| {
+            WipeoutVariables::decode(r).map(N::WipeoutVariables)
+        }),
+        ("XRECORD", |r| XRecord::decode(r).map(N::XRecord)),
+    ]
+};
+
+/// The decoder of class type `name` in `table` (sorted by name).
+fn class_decoder<T: Copy>(table: &[(&str, T)], name: &str) -> Option<T> {
+    let i = table.binary_search_by(|(n, _)| (*n).cmp(name)).ok()?;
+    Some(table[i].1)
+}
 
 /// Whether the library decodes objects of type `key` (entities when
 /// `entity`) into typed values in an R2018 file: whether a typed decoder
-/// exists for it. Class types are looked up in [`MODELED_ENTITY_CLASSES`]
-/// and [`MODELED_OBJECT_CLASSES`]; fixed types in a table made once by
-/// asking the dispatchers. Both agree with the dispatchers (a test checks
-/// every fixed code and class name against [`probe_modeled`]).
+/// exists for it. Class types are looked up in [`ENTITY_CLASSES`] and
+/// [`OBJECT_CLASSES`], the dispatchers' own tables; fixed types in a table
+/// made once by asking the dispatchers.
 fn is_modeled(key: TypeKey, entity: bool) -> bool {
     use std::sync::OnceLock;
     static FIXED: OnceLock<Vec<[bool; 2]>> = OnceLock::new();
     match key {
-        TypeKey::Class(name) => {
-            let names: &[&str] = if entity {
-                &MODELED_ENTITY_CLASSES
-            } else {
-                &MODELED_OBJECT_CLASSES
-            };
-            names.binary_search(&name).is_ok()
-        }
+        TypeKey::Class(name) if entity => class_decoder(&ENTITY_CLASSES, name).is_some(),
+        TypeKey::Class(name) => class_decoder(&OBJECT_CLASSES, name).is_some(),
         TypeKey::Fixed(code) => FIXED
             .get_or_init(|| {
                 (0..FIRST_CLASS_NUMBER)
@@ -1179,9 +1243,10 @@ enum TypeKey<'a> {
     Class(&'a str),
 }
 
-/// The typed entity decoders; `None` keeps the entity raw. Fixed types
-/// older files may store as class types (HATCH, OLE2FRAME,
-/// ACAD_PROXY_ENTITY, LWPOLYLINE) are decoded by either key.
+/// The typed entity decoders; `None` keeps the entity raw. Class types are
+/// decoded by [`ENTITY_CLASSES`]; fixed types older files may store as
+/// class types (HATCH, OLE2FRAME, ACAD_PROXY_ENTITY, LWPOLYLINE) are
+/// decoded by either key.
 fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
     use type_code::*;
     let dim =
@@ -1196,20 +1261,7 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
         |r: &mut ObjReader| LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)));
     let code = match key {
         TypeKey::Fixed(code) => code,
-        TypeKey::Class(name) => {
-            return Some(match name {
-                "ARC_DIMENSION" => dim(r, DimType::ArcLength),
-                "LARGE_RADIAL_DIMENSION" => dim(r, DimType::LargeRadial),
-                "MULTILEADER" => MultiLeader::decode(r).map(|m| Entity::MultiLeader(Box::new(m))),
-                "IMAGE" => Image::decode(r).map(|i| Entity::Image(Box::new(i))),
-                "WIPEOUT" => Image::decode(r).map(|i| Entity::Wipeout(Box::new(i))),
-                "HATCH" => hatch(r),
-                "OLE2FRAME" => ole2frame(r),
-                "ACAD_PROXY_ENTITY" => proxy(r),
-                "LWPOLYLINE" => lwpolyline(r),
-                _ => return None,
-            });
-        }
+        TypeKey::Class(name) => return Some(class_decoder(&ENTITY_CLASSES, name)?(r)),
     };
     Some(match code {
         LINE => Line::decode(r).map(Entity::Line),
@@ -1264,53 +1316,25 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
     })
 }
 
-/// The typed non-graphical decoders; `None` keeps the object raw. The fixed
-/// types also decoded by class name, as older files may store them (LAYOUT
-/// and ACDBPLACEHOLDER are class types in R2000), are DICTIONARY, XRECORD,
-/// LAYOUT, GROUP, MLINESTYLE, ACDBPLACEHOLDER and ACAD_PROXY_OBJECT; the
-/// other names below are class types only.
+/// The typed non-graphical decoders; `None` keeps the object raw. Class
+/// types are decoded by [`OBJECT_CLASSES`]; the fixed types also decoded by
+/// class name there, as older files may store them (LAYOUT and
+/// ACDBPLACEHOLDER are class types in R2000), are DICTIONARY, XRECORD,
+/// LAYOUT, GROUP, MLINESTYLE, ACDBPLACEHOLDER and ACAD_PROXY_OBJECT.
 fn typed_object(key: TypeKey, r: &mut ObjReader) -> Option<Result<NonGraphical>> {
     use type_code::*;
     let code = match key {
         TypeKey::Fixed(code) => code,
         TypeKey::Class(name) => {
-            use NonGraphical as N;
-            return Some(match name {
-                "DICTIONARY" => Dictionary::decode(r).map(N::Dictionary),
-                "ACDBDICTIONARYWDFLT" | "DICTIONARYWDFLT" => {
-                    DictionaryWithDefault::decode(r).map(N::DictionaryWithDefault)
-                }
-                "XRECORD" => XRecord::decode(r).map(N::XRecord),
-                "LAYOUT" => Layout::decode(r).map(|l| N::Layout(Box::new(l))),
-                "PLOTSETTINGS" => PlotSettings::decode(r).map(|p| N::PlotSettings(Box::new(p))),
-                "GROUP" => Group::decode(r).map(N::Group),
-                "MLINESTYLE" => MLineStyle::decode(r).map(N::MLineStyle),
-                "MLEADERSTYLE" => MLeaderStyle::decode(r).map(|m| N::MLeaderStyle(Box::new(m))),
-                "TABLESTYLE" => TableStyle::decode(r).map(N::TableStyle),
-                "IMAGEDEF" => ImageDef::decode(r).map(N::ImageDef),
-                "IMAGEDEF_REACTOR" => ImageDefReactor::decode(r).map(N::ImageDefReactor),
-                "RASTERVARIABLES" => RasterVariables::decode(r).map(N::RasterVariables),
-                "WIPEOUTVARIABLES" => WipeoutVariables::decode(r).map(N::WipeoutVariables),
-                "SCALE" => Scale::decode(r).map(N::Scale),
-                "DICTIONARYVAR" => DictionaryVar::decode(r).map(N::DictionaryVar),
-                "ACDBPLACEHOLDER" => Ok(N::Placeholder),
-                "SORTENTSTABLE" => SortEntsTable::decode(r).map(N::SortEntsTable),
-                "ACAD_PROXY_OBJECT" => ProxyObject::decode(r).map(|p| N::ProxyObject(Box::new(p))),
-                "SPATIAL_INDEX" => SpatialIndex::decode(r).map(|s| N::SpatialIndex(Box::new(s))),
-                "LAYER_INDEX" => LayerIndex::decode(r).map(N::LayerIndex),
-                "SPATIAL_FILTER" => SpatialFilter::decode(r).map(N::SpatialFilter),
-                n if modeled_since(n).is_some_and(|v| r.version < v) => return None,
-                "VISUALSTYLE" if r.saved_by_object_version => return None,
-                "MATERIAL" => Material::decode(r).map(|m| N::Material(Box::new(m))),
-                "VISUALSTYLE" => VisualStyle::decode(r).map(|v| N::VisualStyle(Box::new(v))),
-                "ACDBSECTIONVIEWSTYLE" => {
-                    SectionViewStyle::decode(r).map(|v| N::SectionViewStyle(Box::new(v)))
-                }
-                "ACDBDETAILVIEWSTYLE" => {
-                    DetailViewStyle::decode(r).map(|v| N::DetailViewStyle(Box::new(v)))
-                }
-                _ => return None,
-            });
+            let decode = class_decoder(&OBJECT_CLASSES, name)?;
+            // Types modeled from a version on are kept raw before it; a
+            // VISUALSTYLE saved in an older layout is kept raw too.
+            if modeled_since(name).is_some_and(|v| r.version < v)
+                || (name == "VISUALSTYLE" && r.saved_by_object_version)
+            {
+                return None;
+            }
+            return Some(decode(r));
         }
     };
     if let Some(kind) = TableKind::from_control_code(code) {
@@ -1696,14 +1720,15 @@ mod tests {
         w.finish(type_code).unwrap()
     }
 
-    /// The modelled-type tables agree with the dispatchers for every fixed
-    /// code and every class name the library knows of (the tables', the
-    /// fixed types', the known classes', and some it does not model), for
-    /// both kinds; the class name tables are sorted, for the binary search.
+    /// The class tables are sorted without duplicates, for the binary
+    /// search; `is_modeled` agrees with the dispatchers for every fixed code
+    /// and every class name the library knows of (the tables', the fixed
+    /// types', the known classes', and some it does not model), for both
+    /// kinds.
     #[test]
     fn modeled_tables_match_the_dispatchers() {
-        assert!(MODELED_ENTITY_CLASSES.is_sorted());
-        assert!(MODELED_OBJECT_CLASSES.is_sorted());
+        assert!(ENTITY_CLASSES.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(OBJECT_CLASSES.windows(2).all(|w| w[0].0 < w[1].0));
         for code in 0..=u16::MAX {
             for entity in [false, true] {
                 let key = TypeKey::Fixed(code);
@@ -1714,10 +1739,10 @@ mod tests {
                 );
             }
         }
-        let mut names: Vec<String> = MODELED_ENTITY_CLASSES
+        let mut names: Vec<String> = ENTITY_CLASSES
             .iter()
-            .chain(&MODELED_OBJECT_CLASSES)
-            .map(|n| n.to_string())
+            .map(|(n, _)| n.to_string())
+            .chain(OBJECT_CLASSES.iter().map(|(n, _)| n.to_string()))
             .collect();
         names.extend((0..FIRST_CLASS_NUMBER).filter_map(|c| Some(fixed_type(c)?.0.to_owned())));
         names.extend((0..200u16).filter_map(|i| {
