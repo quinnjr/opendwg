@@ -879,12 +879,84 @@ impl Object {
     }
 }
 
+/// The class types [`typed_entity`] decodes, sorted.
+const MODELED_ENTITY_CLASSES: [&str; 9] = [
+    "ACAD_PROXY_ENTITY",
+    "ARC_DIMENSION",
+    "HATCH",
+    "IMAGE",
+    "LARGE_RADIAL_DIMENSION",
+    "LWPOLYLINE",
+    "MULTILEADER",
+    "OLE2FRAME",
+    "WIPEOUT",
+];
+
+/// The class types [`typed_object`] decodes in R2018 files, sorted.
+const MODELED_OBJECT_CLASSES: [&str; 26] = [
+    "ACAD_PROXY_OBJECT",
+    "ACDBDETAILVIEWSTYLE",
+    "ACDBDICTIONARYWDFLT",
+    "ACDBPLACEHOLDER",
+    "ACDBSECTIONVIEWSTYLE",
+    "DICTIONARY",
+    "DICTIONARYVAR",
+    "DICTIONARYWDFLT",
+    "GROUP",
+    "IMAGEDEF",
+    "IMAGEDEF_REACTOR",
+    "LAYER_INDEX",
+    "LAYOUT",
+    "MATERIAL",
+    "MLEADERSTYLE",
+    "MLINESTYLE",
+    "PLOTSETTINGS",
+    "RASTERVARIABLES",
+    "SCALE",
+    "SORTENTSTABLE",
+    "SPATIAL_FILTER",
+    "SPATIAL_INDEX",
+    "TABLESTYLE",
+    "VISUALSTYLE",
+    "WIPEOUTVARIABLES",
+    "XRECORD",
+];
+
 /// Whether the library decodes objects of type `key` (entities when
-/// `entity`) into typed values: whether a typed decoder exists for it.
+/// `entity`) into typed values in an R2018 file: whether a typed decoder
+/// exists for it. Class types are looked up in [`MODELED_ENTITY_CLASSES`]
+/// and [`MODELED_OBJECT_CLASSES`]; fixed types in a table made once by
+/// asking the dispatchers. Both agree with the dispatchers (a test checks
+/// every fixed code and class name against [`probe_modeled`]).
 fn is_modeled(key: TypeKey, entity: bool) -> bool {
+    use std::sync::OnceLock;
+    static FIXED: OnceLock<Vec<[bool; 2]>> = OnceLock::new();
+    match key {
+        TypeKey::Class(name) => {
+            let names: &[&str] = if entity {
+                &MODELED_ENTITY_CLASSES
+            } else {
+                &MODELED_OBJECT_CLASSES
+            };
+            names.binary_search(&name).is_ok()
+        }
+        TypeKey::Fixed(code) => FIXED
+            .get_or_init(|| {
+                (0..FIRST_CLASS_NUMBER)
+                    .map(|c| {
+                        [false, true].map(|entity| probe_modeled(TypeKey::Fixed(c), entity))
+                    })
+                    .collect()
+            })
+            .get(usize::from(code))
+            .is_some_and(|kinds| kinds[usize::from(entity)]),
+    }
+}
+
+/// [`is_modeled`] asked of the dispatchers: they only report whether they
+/// handle `key`; on no input they fail at once, and the result is dropped.
+fn probe_modeled(key: TypeKey, entity: bool) -> bool {
     use crate::bits::BitReader;
-    // The decoders only report whether they handle `key`; on no input they
-    // fail at once, and the result is dropped.
     let mut r = ObjReader::from_streams(
         BitReader::new(&[]),
         None,
@@ -1251,7 +1323,7 @@ fn unread_bits(r: &ObjReader) -> Option<String> {
 fn try_typed<T>(
     r: &mut ObjReader,
     key: TypeKey,
-    type_name: &str,
+    type_name: impl FnOnce() -> String,
     decode: fn(TypeKey, &mut ObjReader) -> Option<Result<T>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<T> {
@@ -1269,7 +1341,7 @@ fn try_typed<T>(
     diagnostics.push(Diagnostic {
         severity: Severity::Warning,
         handle: Some(r.handle),
-        message: format!("{type_name} decode failed: {failure}; kept raw"),
+        message: format!("{} decode failed: {failure}; kept raw", type_name()),
     });
     None
 }
@@ -1330,13 +1402,11 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
         };
         (TypeKey::Fixed(code), None, is_entity)
     };
-    let name = class_name
-        .clone()
-        .or_else(|| fixed_type(code).map(|(n, _)| n.to_owned()))
-        .unwrap_or_else(|| format!("TYPE_{code}"));
+    // The type's name, for a failed typed decode's warning only: made then.
+    let name = || key_name(key).into_owned();
     let obj = if is_entity {
         let common = decode_entity_common(&mut r)?;
-        let entity = match try_typed(&mut r, key, &name, typed_entity, &mut ctx.diagnostics) {
+        let entity = match try_typed(&mut r, key, name, typed_entity, &mut ctx.diagnostics) {
             Some(e) => e,
             None => Entity::Unknown(RawObject::decode(&mut r, code, class_name)?),
         };
@@ -1347,7 +1417,7 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
             .mleader_style_marker
             .is_some_and(|m| common.xdata.iter().any(|x| x.app == m));
         r.saved_by_object_version = saved_by_object_version(&common);
-        let object = match try_typed(&mut r, key, &name, typed_object, &mut ctx.diagnostics) {
+        let object = match try_typed(&mut r, key, name, typed_object, &mut ctx.diagnostics) {
             Some(o) => o,
             None => NonGraphical::Unknown(RawObject::decode(&mut r, code, class_name)?),
         };
@@ -1591,6 +1661,50 @@ mod tests {
             w.handle_stream().write_b(true);
         }
         w.finish(type_code).unwrap()
+    }
+
+    /// The modelled-type tables agree with the dispatchers for every fixed
+    /// code and every class name the library knows of (the tables', the
+    /// fixed types', the known classes', and some it does not model), for
+    /// both kinds; the class name tables are sorted, for the binary search.
+    #[test]
+    fn modeled_tables_match_the_dispatchers() {
+        assert!(MODELED_ENTITY_CLASSES.is_sorted());
+        assert!(MODELED_OBJECT_CLASSES.is_sorted());
+        for code in 0..=u16::MAX {
+            for entity in [false, true] {
+                let key = TypeKey::Fixed(code);
+                assert_eq!(
+                    is_modeled(key, entity),
+                    probe_modeled(key, entity),
+                    "{code} {entity}"
+                );
+            }
+        }
+        let mut names: Vec<String> = MODELED_ENTITY_CLASSES
+            .iter()
+            .chain(&MODELED_OBJECT_CLASSES)
+            .map(|n| n.to_string())
+            .collect();
+        names.extend((0..FIRST_CLASS_NUMBER).filter_map(|c| Some(fixed_type(c)?.0.to_owned())));
+        names.extend(
+            (0..200u16).filter_map(|i| {
+                Some(crate::section::classes::known_class_name(usize::from(i))?.to_owned())
+            }),
+        );
+        names.extend(
+            ["ACAD_TABLE", "CELLSTYLEMAP", "AECC_STYLE", "", "dictionary"].map(String::from),
+        );
+        for name in &names {
+            for entity in [false, true] {
+                let key = TypeKey::Class(name);
+                assert_eq!(
+                    is_modeled(key, entity),
+                    probe_modeled(key, entity),
+                    "{name} {entity}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1897,7 +2011,7 @@ mod tests {
         let pos = r.data.bit_pos();
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
-        assert_eq!(try_typed(&mut r, key, "XRECORD", failing, &mut diags), None);
+        assert_eq!(try_typed(&mut r, key, || "XRECORD".into(), failing, &mut diags), None);
         assert_eq!(
             diags,
             [Diagnostic {
@@ -1922,14 +2036,14 @@ mod tests {
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
         assert_eq!(
-            try_typed(&mut r, key, "XRECORD", succeeding, &mut diags),
+            try_typed(&mut r, key, || "XRECORD".into(), succeeding, &mut diags),
             Some(300)
         );
         assert!(diags.is_empty());
         assert_eq!(r.data.bit_pos(), pos + 19);
         assert_eq!(r.data.remaining_bits(), 0);
         assert_eq!(
-            try_typed(&mut r, key, "XRECORD", typed_none, &mut diags),
+            try_typed(&mut r, key, || "XRECORD".into(), typed_none, &mut diags),
             None
         );
         assert_eq!(r.data.bit_pos(), pos + 19);
@@ -1943,7 +2057,7 @@ mod tests {
         let pos = r.data.bit_pos();
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
-        assert_eq!(try_typed(&mut r, key, "XRECORD", partial, &mut diags), None);
+        assert_eq!(try_typed(&mut r, key, || "XRECORD".into(), partial, &mut diags), None);
         assert_eq!(r.data.bit_pos(), pos);
         assert_eq!(diags.len(), 1);
         // Left: the B; the string (a 10-bit BS length and 6 UTF-16 units);

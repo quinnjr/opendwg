@@ -148,6 +148,13 @@ const KNOWN_CLASSES: [(&str, &str, &str, u16, u16, u32, u32); 29] = [
     ("LARGE_RADIAL_DIMENSION", "AcDbRadialDimensionLarge", "ObjectDBX Classes", 0x401, ITEM_CLASS_ENTITY, 25, 0),
 ];
 
+/// The DXF name of the `i`th class the library has a definition of (see
+/// [`known_class`]), for tests that go through them all.
+#[cfg(test)]
+pub(crate) fn known_class_name(i: usize) -> Option<&'static str> {
+    KNOWN_CLASSES.get(i).map(|c| c.0)
+}
+
 /// The definition of the class named `dxf_name` among the class types the
 /// library models (see [`KNOWN_CLASSES`]), numbered `number`, with no
 /// instances.
