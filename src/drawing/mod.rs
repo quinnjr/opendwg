@@ -240,6 +240,9 @@ impl Drawing {
         if let Some(block) = block {
             state.forget_inserts(block);
         }
+        // The name index: a table control's or dictionary's list, or a
+        // table entry's name, may change.
+        state.forget_names(h);
         self.objects.get_mut(&h)
     }
 

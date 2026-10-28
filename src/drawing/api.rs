@@ -33,7 +33,7 @@
 //! joins it and a removed entity leaves it, but other users added here do
 //! not join it; saving refreshes it (`drawing::write`).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::Drawing;
 use super::refs::{IndexState, RefIndex, object_refs};
@@ -67,6 +67,12 @@ pub(super) fn names_eq(a: &str, b: &str) -> bool {
     a.chars()
         .flat_map(char::to_lowercase)
         .eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// `name` folded as [`names_eq`] compares it: two names are equal without
+/// case exactly when their folded forms are equal.
+pub(super) fn fold_name(name: &str) -> String {
+    name.chars().flat_map(char::to_lowercase).collect()
 }
 
 /// Whether `obj` owns a list R2000 stores as a first/last pair that was not
@@ -471,9 +477,82 @@ impl Drawing {
 
     /// The layer named `name`, compared without case as AutoCAD does.
     pub fn layer_by_name(&self, name: &str) -> Option<Handle> {
-        self.layers()
-            .find(|(_, l)| names_eq(&l.entry.name, name))
-            .map(|(h, _)| h)
+        self.table_named(TableKind::Layer, name)
+            .into_iter()
+            .find(|&h| self.layer(h).is_some())
+    }
+
+    /// The entries of the table of `kind` named `name` (compared without
+    /// case), in table order (see [`Drawing::table_handles`]), from the name
+    /// index (see `IndexState::names`): the table's names are read once,
+    /// not at every lookup.
+    pub(super) fn table_named(&self, kind: TableKind, name: &str) -> Vec<Handle> {
+        let Some((control, _)) = self.table_control(kind) else {
+            return Vec::new();
+        };
+        self.named(control, name, || {
+            self.table_handles(kind)
+                .into_iter()
+                .filter_map(|h| match self.objects.get(&h) {
+                    Some(Object::Other { object, .. }) => {
+                        Some((object.table_entry()?.name.clone(), h))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    /// The entries of dictionary (with or without default) `dictionary`
+    /// named `name` (compared without case), in list order, from the name
+    /// index; none when it is not a dictionary.
+    fn dictionary_named(&self, dictionary: Handle, name: &str) -> Vec<Handle> {
+        let entries = match self.objects.get(&dictionary) {
+            Some(Object::Other {
+                object: NonGraphical::Dictionary(d),
+                ..
+            }) => &d.entries,
+            Some(Object::Other {
+                object: NonGraphical::DictionaryWithDefault(d),
+                ..
+            }) => &d.dictionary.entries,
+            _ => return Vec::new(),
+        };
+        self.named(dictionary, name, || entries.clone())
+    }
+
+    /// The handles named `name` in list `list` (a table control, else a
+    /// dictionary), indexing the list's `(name, handle)` pairs first if it
+    /// is not indexed.
+    fn named(
+        &self,
+        list: Handle,
+        name: &str,
+        entries: impl FnOnce() -> Vec<(String, Handle)>,
+    ) -> Vec<Handle> {
+        let mut state = self.ref_index.lock();
+        if !state.names.contains_key(&list) {
+            let table = matches!(
+                self.objects.get(&list),
+                Some(Object::Other {
+                    object: NonGraphical::TableControl(_),
+                    ..
+                })
+            );
+            let mut names: HashMap<String, Vec<Handle>> = HashMap::new();
+            for (n, h) in entries() {
+                names.entry(fold_name(&n)).or_default().push(h);
+                if table {
+                    state.name_holders.entry(h).or_default().push(list);
+                }
+            }
+            state.name_scans += 1;
+            state.names.insert(list, names);
+        }
+        state.names[&list]
+            .get(&fold_name(name))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The model space block record: the header's, or the block record named
@@ -1284,9 +1363,9 @@ impl Drawing {
         {
             c.entries.push(h);
         }
-        self.ref_index
-            .get_mut()
-            .added(&self.objects, &[h], &[(control, h, SOFT_OWNER)]);
+        let state = self.ref_index.get_mut();
+        state.added(&self.objects, &[h], &[(control, h, SOFT_OWNER)]);
+        state.name_added(control, fold_name(&name), h, true);
         Ok(h)
     }
 
@@ -1303,11 +1382,7 @@ impl Drawing {
                 ))
             };
         }
-        let taken = self.table_handles(kind).into_iter().any(|h| {
-            matches!(self.objects.get(&h), Some(Object::Other { object, .. })
-                if object.table_entry().is_some_and(|e| names_eq(&e.name, name)))
-        });
-        if taken {
+        if !self.table_named(kind, name).is_empty() {
             return Err(invalid(
                 None,
                 format!("the {kind:?} table already has an entry named {name:?}"),
@@ -1342,24 +1417,20 @@ impl Drawing {
         name: &str,
         object: NonGraphical,
     ) -> Result<Handle> {
-        let entries = match self.objects.get(&dictionary) {
+        match self.objects.get(&dictionary) {
             None => return Err(Error::NotFound(dictionary)),
             Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
+                object: NonGraphical::Dictionary(_) | NonGraphical::DictionaryWithDefault(_),
                 ..
-            }) => &d.entries,
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => &d.dictionary.entries,
+            }) => {}
             Some(_) => {
                 return Err(invalid(
                     Some(dictionary),
                     format!("{dictionary} is not a dictionary"),
                 ));
             }
-        };
-        if name.is_empty() || entries.iter().any(|(n, _)| names_eq(n, name)) {
+        }
+        if name.is_empty() || !self.dictionary_named(dictionary, name).is_empty() {
             return Err(invalid(
                 Some(dictionary),
                 format!("the dictionary already has an entry named {name:?}, or it is empty"),
@@ -1423,9 +1494,9 @@ impl Drawing {
             }) => d.dictionary.entries.push((name.to_owned(), h)),
             _ => {}
         }
-        self.ref_index
-            .get_mut()
-            .added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
+        let state = self.ref_index.get_mut();
+        state.added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
+        state.name_added(dictionary, fold_name(name), h, false);
         Ok(h)
     }
 
@@ -1587,11 +1658,13 @@ impl Drawing {
         {
             c.entries.push(record);
         }
-        self.ref_index.get_mut().added(
+        let state = self.ref_index.get_mut();
+        state.added(
             &self.objects,
             &[record, begin, end],
             &[(control, record, SOFT_OWNER)],
         );
+        state.name_added(control, fold_name(name), record, true);
         Ok(record)
     }
 
@@ -1909,6 +1982,9 @@ impl Drawing {
                 detach(obj, xs);
                 state.detached += 1;
             }
+            // Its list (a table control's or dictionary's) may have lost an
+            // entry.
+            state.forget_names(r);
         }
         for &x in &set {
             let block = match self.objects.get(&x) {
@@ -1918,6 +1994,7 @@ impl Drawing {
             if let Some(block) = block {
                 state.forget_inserts(block);
             }
+            state.forget_names(x);
         }
         let mut removed: BTreeMap<Handle, Object> = BTreeMap::new();
         for &x in &set {
@@ -2287,6 +2364,79 @@ mod tests {
             assert_index_fresh(&d);
         }
         assert_eq!(deltas[0], deltas[1], "independent of the drawing's size");
+    }
+
+    /// Adding k layers to a table of 100 or of 1000 reads the table's names
+    /// once (the first lookup), whatever its size: a name check is a hash
+    /// lookup, not a scan of the table, and so is `layer_by_name`.
+    #[test]
+    fn name_checks_are_independent_of_the_table_size() {
+        let k = 50;
+        let mut scans = vec![];
+        for size in [100, 1000] {
+            let mut d = Drawing::new();
+            for i in 0..size {
+                d.add_layer(Layer::new(&format!("L{i}"))).unwrap();
+            }
+            let before = d.ref_index.lock().name_scans;
+            for i in 0..k {
+                d.add_layer(Layer::new(&format!("M{i}"))).unwrap();
+                assert!(d.layer_by_name(&format!("m{i}")).is_some());
+            }
+            assert!(d.add_layer(Layer::new("l7")).is_err());
+            scans.push((before, d.ref_index.lock().name_scans - before));
+        }
+        assert_eq!(scans[0], scans[1], "independent of the table's size");
+        assert_eq!(scans[0].1, 0, "no scan once indexed");
+    }
+
+    /// The name index follows every change: a table entry renamed through
+    /// `layer_mut` (its old name is free, its new one taken), a removed
+    /// table entry or dictionary entry (its name free), a list changed
+    /// through `get_mut`, and dictionary entries compare without case.
+    #[test]
+    fn name_index_follows_changes() {
+        let mut d = Drawing::new();
+        let a = d.add_layer(Layer::new("A")).unwrap();
+        assert!(d.add_layer(Layer::new("a")).is_err());
+        d.layer_mut(a).unwrap().entry.name = "B".into();
+        assert_eq!(d.layer_by_name("b"), Some(a));
+        assert!(d.add_layer(Layer::new("b")).is_err());
+        let a2 = d.add_layer(Layer::new("a")).unwrap();
+        d.remove(a2).unwrap();
+        assert_eq!(d.layer_by_name("A"), None);
+        d.add_layer(Layer::new("A")).unwrap();
+        // A list emptied by hand through `get_mut`.
+        let control = d.header.layer_control;
+        let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = d.get_mut(control)
+        else {
+            panic!("the layer control");
+        };
+        let kept = c.entries.clone();
+        c.entries.retain(|&h| h != a);
+        assert_eq!(d.layer_by_name("B"), None);
+        if let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = d.get_mut(control)
+        {
+            c.entries = kept;
+        }
+        assert_eq!(d.layer_by_name("B"), Some(a));
+        // Dictionary entries.
+        let nod = d.named_objects();
+        let x = d
+            .add_object(nod, "MY_DICT", NonGraphical::Dictionary(Dictionary::default()))
+            .unwrap();
+        let dup = d.add_object(nod, "my_dict", NonGraphical::Dictionary(Dictionary::default()));
+        assert!(dup.is_err());
+        d.remove(x).unwrap();
+        d.add_object(nod, "my_dict", NonGraphical::Dictionary(Dictionary::default()))
+            .unwrap();
+        assert_index_fresh(&d);
     }
 
     /// Extended data that cannot be encoded as R2018 (an application with no

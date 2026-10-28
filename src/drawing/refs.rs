@@ -310,6 +310,18 @@ pub(crate) struct IndexState {
     /// The number of block entity lists scanned to fill `block_inserts`, for
     /// tests.
     pub(crate) block_scans: usize,
+    /// For the table controls and dictionaries whose entries were looked up
+    /// by name, their entries by name folded to lower case (see
+    /// `api::fold_name`), each name's in list order; kept up to date by the
+    /// add methods, and an entry dropped when its list, or the name of one
+    /// of its table entries, may have changed (see
+    /// [`IndexState::forget_names`]).
+    pub(crate) names: HashMap<Handle, HashMap<String, Vec<Handle>>>,
+    /// For each table entry indexed in `names`, the table controls it is
+    /// indexed under (its name is in it, not in the control).
+    pub(crate) name_holders: HashMap<Handle, Vec<Handle>>,
+    /// The number of lists scanned to fill `names`, for tests.
+    pub(crate) name_scans: usize,
 }
 
 impl IndexState {
@@ -386,6 +398,26 @@ impl IndexState {
     /// Drop what `block_inserts` holds of block record `block`.
     pub(crate) fn forget_inserts(&mut self, block: Handle) {
         self.block_inserts.remove(&block);
+    }
+
+    /// Drop what `names` holds of `h`'s list (a table control or dictionary)
+    /// and of the tables `h` is an entry of.
+    pub(crate) fn forget_names(&mut self, h: Handle) {
+        self.names.remove(&h);
+        for holder in self.name_holders.remove(&h).unwrap_or_default() {
+            self.names.remove(&holder);
+        }
+    }
+
+    /// Record in `names` the new entry `h` named `folded` of `list` (a table
+    /// control when `table`, else a dictionary), if its names are indexed.
+    pub(crate) fn name_added(&mut self, list: Handle, folded: String, h: Handle, table: bool) {
+        if let Some(names) = self.names.get_mut(&list) {
+            names.entry(folded).or_default().push(h);
+            if table {
+                self.name_holders.entry(h).or_default().push(list);
+            }
+        }
     }
 
     pub(crate) fn mark_dirty(&mut self, h: Handle) {
