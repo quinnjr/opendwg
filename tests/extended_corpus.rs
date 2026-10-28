@@ -338,6 +338,40 @@ fn gbk_text_decodes() {
     }
 }
 
+/// The ODA SDK and civilcraft's own writer store pre-R2007 text items
+/// (XRECORD texts, extended data strings) with code page 0; read in the
+/// drawing's code page, their ASCII text gives no code page warning, and
+/// the XRECORD texts read as text.
+#[test]
+fn code_page_0_text_reads_without_warnings() {
+    use opendwg::object::{NonGraphical, XRecordValue};
+    for name in ["cc-02", "cc-04", "cc-15", "cc-21"] {
+        let Some(d) = open(name) else {
+            continue;
+        };
+        let warned: Vec<&str> = d
+            .diagnostics()
+            .iter()
+            .map(|x| x.message.as_str())
+            .filter(|m| m.contains("code page"))
+            .collect();
+        assert!(warned.is_empty(), "{name}: {warned:?}");
+        let texts = d
+            .objects()
+            .filter_map(|(_, o)| match o {
+                Object::Other {
+                    object: NonGraphical::XRecord(x),
+                    ..
+                } => Some(x),
+                _ => None,
+            })
+            .flat_map(|x| &x.items)
+            .filter(|(_, v)| matches!(v, XRecordValue::Text(t) if !t.is_empty()))
+            .count();
+        assert!(texts > 0, "{name}: no XRECORD text");
+    }
+}
+
 /// Civil 3D's AECC objects (classes the library does not model) are kept
 /// raw and written back byte for byte, as are all other objects of these
 /// AutoCAD-written files.
