@@ -589,11 +589,12 @@ impl Drawing {
         self.named(control, name, || {
             self.table_handles(kind)
                 .into_iter()
-                .filter_map(|h| match self.objects.get(&h) {
-                    Some(Object::Other { object, .. }) => {
-                        Some((object.table_entry()?.name.clone(), h))
-                    }
-                    _ => None,
+                .map(|h| {
+                    let name = match self.objects.get(&h) {
+                        Some(Object::Other { object, .. }) => object.table_entry(),
+                        _ => None,
+                    };
+                    (name.map(|e| e.name.clone()), h)
                 })
                 .collect()
         })
@@ -606,17 +607,25 @@ impl Drawing {
         let Some(d) = self.objects.get(&dictionary).and_then(Object::dictionary) else {
             return Vec::new();
         };
-        self.named(dictionary, name, || d.entries.clone())
+        self.named(dictionary, name, || {
+            d.entries
+                .iter()
+                .map(|(n, h)| (Some(n.clone()), *h))
+                .collect()
+        })
     }
 
     /// The handles named `name` in list `list` (a table control, else a
     /// dictionary), indexing the list's `(name, handle)` pairs first if it
-    /// is not indexed.
+    /// is not indexed. A table's entries without a name (an object that is
+    /// no table entry) are not indexed by name, but name the control among
+    /// their holders all the same: changed into a named entry through
+    /// `get_mut`, they make the table's names be read again.
     fn named(
         &self,
         list: Handle,
         name: &str,
-        entries: impl FnOnce() -> Vec<(String, Handle)>,
+        entries: impl FnOnce() -> Vec<(Option<String>, Handle)>,
     ) -> Vec<Handle> {
         let mut state = self.ref_index.lock();
         if !state.names.contains_key(&list) {
@@ -629,7 +638,9 @@ impl Drawing {
             );
             let mut names: HashMap<String, Vec<Handle>> = HashMap::new();
             for (n, h) in entries() {
-                names.entry(fold_name(&n)).or_default().push(h);
+                if let Some(n) = n {
+                    names.entry(fold_name(&n)).or_default().push(h);
+                }
                 if table {
                     state.name_holders.entry(h).or_default().insert(list);
                 }
@@ -2607,6 +2618,53 @@ mod tests {
             NonGraphical::Dictionary(Dictionary::default()),
         )
         .unwrap();
+        // A dictionary with a default entry is indexed as a dictionary.
+        let with_default = d
+            .add_object(
+                nod,
+                "WITH_DEFAULT",
+                NonGraphical::DictionaryWithDefault(DictionaryWithDefault {
+                    dictionary: Dictionary::default(),
+                    default_entry: Handle(0),
+                }),
+            )
+            .unwrap();
+        let empty = || NonGraphical::Dictionary(Dictionary::default());
+        let e = d.add_object(with_default, "Entry", empty()).unwrap();
+        assert!(d.add_object(with_default, "ENTRY", empty()).is_err());
+        assert_eq!(d.dictionary_named(with_default, "entry"), [e]);
+        if let Some(dict) = d.get_mut(with_default).and_then(Object::dictionary_mut) {
+            dict.entries[0].0 = "Renamed".into();
+        }
+        assert!(d.dictionary_named(with_default, "entry").is_empty());
+        assert_eq!(d.dictionary_named(with_default, "RENAMED"), [e]);
+        d.add_object(with_default, "entry", empty()).unwrap();
+        assert_index_fresh(&d);
+    }
+
+    /// A table entry listed without a name (a placeholder) and later
+    /// changed into a named entry through `get_mut` is found by its name:
+    /// the index forgets the table's names when any listed entry changes,
+    /// named or not.
+    #[test]
+    fn unnamed_table_entry_retyped_is_found() {
+        let mut d = Drawing::new();
+        let nod = d.named_objects();
+        let p = d.add_object(nod, "P", NonGraphical::Placeholder).unwrap();
+        let control = d.header.layer_control;
+        if let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = d.get_mut(control)
+        {
+            c.entries.push(p);
+        }
+        assert_eq!(d.layer_by_name("Q"), None);
+        if let Some(Object::Other { object, .. }) = d.get_mut(p) {
+            *object = NonGraphical::Layer(Layer::new("Q"));
+        }
+        assert_eq!(d.layer_by_name("q"), Some(p));
+        assert!(d.add_layer(Layer::new("Q")).is_err());
         assert_index_fresh(&d);
     }
 
