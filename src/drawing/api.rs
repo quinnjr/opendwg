@@ -114,6 +114,47 @@ pub(super) fn next_handles(
     }
 }
 
+/// The new handles of objects added together (a family: a polyline and
+/// its vertices), ascending, and the one way [`Drawing::check_new`] asks
+/// whether a handle is among them: a binary search, as a family's new
+/// handles are many and each object makes several references.
+struct Pending<'a> {
+    handles: &'a [Handle],
+    /// The handles compared, for tests.
+    #[cfg(test)]
+    probes: std::cell::Cell<usize>,
+    /// The membership questions asked, for tests.
+    #[cfg(test)]
+    lookups: std::cell::Cell<usize>,
+}
+
+impl<'a> Pending<'a> {
+    /// `handles` must be ascending; the adding methods allocate them so
+    /// (see [`Drawing::alloc_handles`]), and `add_family` checks it once
+    /// per family.
+    fn new(handles: &'a [Handle]) -> Self {
+        Pending {
+            handles,
+            #[cfg(test)]
+            probes: Default::default(),
+            #[cfg(test)]
+            lookups: Default::default(),
+        }
+    }
+
+    fn contains(&self, h: Handle) -> bool {
+        #[cfg(test)]
+        self.lookups.set(self.lookups.get() + 1);
+        self.handles
+            .binary_search_by(|p| {
+                #[cfg(test)]
+                self.probes.set(self.probes.get() + 1);
+                p.cmp(&h)
+            })
+            .is_ok()
+    }
+}
+
 /// An object built and checked to be added, as the adding method it is
 /// built for checks it, and not added (see [`Drawing::new_table_entry`],
 /// [`Drawing::new_dictionary_entry`]).
@@ -593,7 +634,10 @@ impl Drawing {
                     state.name_holders.entry(h).or_default().insert(list);
                 }
             }
-            state.name_scans += 1;
+            #[cfg(test)]
+            {
+                state.name_scans += 1;
+            }
             state.names.insert(list, names);
         }
         state.names[&list]
@@ -806,20 +850,19 @@ impl Drawing {
     /// a multiline has as many lines as its style has elements (the kind
     /// checks of `validate()`).
     pub(super) fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
-        let probes = std::cell::Cell::new(0);
-        let result = self.check_new_counted(obj, pending, &probes);
-        self.ref_index.lock().pending_probes += probes.get();
+        let pending = Pending::new(pending);
+        let result = self.check_new_in(obj, &pending);
+        #[cfg(test)]
+        {
+            let mut state = self.ref_index.lock();
+            state.pending_probes += pending.probes.get();
+            state.pending_lookups += pending.lookups.get();
+        }
         result
     }
 
-    /// [`Drawing::check_new`], counting in `probes` the handles of `pending`
-    /// compared.
-    fn check_new_counted(
-        &self,
-        obj: &Object,
-        pending: &[Handle],
-        probes: &std::cell::Cell<usize>,
-    ) -> Result<()> {
+    /// [`Drawing::check_new`], with the new handles `pending`.
+    fn check_new_in(&self, obj: &Object, pending: &Pending) -> Result<()> {
         let common = obj.object_common();
         if common.xdict.is_some() {
             return Err(invalid(
@@ -827,20 +870,7 @@ impl Drawing {
                 "a new object cannot have an extension dictionary",
             ));
         }
-        // A binary search: a family's new handles are many (a polyline's
-        // vertices), and each makes several references.
-        debug_assert!(
-            pending.windows(2).all(|w| w[0] < w[1]),
-            "new handles are given ascending"
-        );
-        let new = |h: Handle| {
-            pending
-                .binary_search_by(|p| {
-                    probes.set(probes.get() + 1);
-                    p.cmp(&h)
-                })
-                .is_ok()
-        };
+        let new = |h: Handle| pending.contains(h);
         let exists = |h: Handle| self.objects.contains_key(&h) || new(h);
         if let Some(&r) = common.reactors.iter().find(|&&r| !exists(r)) {
             return Err(Error::NotFound(r));
@@ -1264,18 +1294,19 @@ impl Drawing {
             if b == to {
                 return true;
             }
+            #[cfg(test)]
             if !state.block_inserts.contains_key(&b) {
-                let targets: HashSet<Handle> = self
-                    .entities_in(b)
+                state.block_scans += 1;
+            }
+            let targets = state.block_inserts.entry(b).or_insert_with(|| {
+                self.entities_in(b)
                     .filter_map(|e| match self.objects.get(&e) {
                         Some(Object::Entity { entity, .. }) => insert_block(entity),
                         _ => None,
                     })
-                    .collect();
-                state.block_scans += 1;
-                state.block_inserts.insert(b, targets);
-            }
-            for &t in &state.block_inserts[&b] {
+                    .collect()
+            });
+            for &t in targets.iter() {
                 if seen.insert(t) {
                     stack.push(t);
                 }
@@ -1352,6 +1383,8 @@ impl Drawing {
                 object: NonGraphical::ImageDefReactor(ImageDefReactor { class_version: 2 }),
             });
         }
+        // Once per family, not per object (see `Pending`).
+        debug_assert!(handles.is_sorted(), "new handles are allocated ascending");
         for obj in &objects {
             self.check_new(obj, handles)?;
         }
@@ -2039,7 +2072,10 @@ impl Drawing {
         for (&r, (xs, _)) in &plan {
             if let Some(obj) = self.objects.get_mut(&r) {
                 detach(obj, xs);
-                state.detached += 1;
+                #[cfg(test)]
+                {
+                    state.detached += 1;
+                }
             }
             // Its list (a table control's or dictionary's) may have lost an
             // entry.
@@ -2694,11 +2730,25 @@ mod tests {
                     (EntityCommon::new(l0), Entity::Vertex3d(vertex))
                 })
                 .collect();
-            let start = d.ref_index.lock().pending_probes;
+            let at = |d: &Drawing| {
+                let s = d.ref_index.lock();
+                (s.pending_probes, s.pending_lookups)
+            };
+            let start = at(&d);
             d.add_polyline(ms, (EntityCommon::new(l0), poly), vertices)
                 .unwrap();
             assert_eq!(d.objects.len(), before + n + 2);
-            d.ref_index.lock().pending_probes - start
+            let end = at(&d);
+            let (probes, lookups) = (end.0 - start.0, end.1 - start.1);
+            // Every question about the new handles is a binary search over
+            // the family's n + 2: about log2(n + 2) comparisons each, one
+            // more for the halving's remainder and one for the last.
+            let per = (n + 2).ilog2() as usize + 2;
+            assert!(
+                lookups > 0 && probes <= lookups * per,
+                "{probes} > {lookups} x {per}"
+            );
+            probes
         };
         let (small, large) = (probes(1_000), probes(10_000));
         assert!(small > 0);

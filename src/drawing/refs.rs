@@ -316,6 +316,7 @@ pub(crate) struct IndexState {
     pub(crate) work: usize,
     /// The number of objects links were dropped from by removals (each
     /// object's lists passed over once per removal), for tests.
+    #[cfg(test)]
     pub(crate) detached: usize,
     /// For the block records looked at by the circular insert check, the
     /// blocks their entities insert (INSERT and MINSERT); kept up to date by
@@ -324,6 +325,7 @@ pub(crate) struct IndexState {
     pub(crate) block_inserts: HashMap<Handle, HashSet<Handle>>,
     /// The number of block entity lists scanned to fill `block_inserts`, for
     /// tests.
+    #[cfg(test)]
     pub(crate) block_scans: usize,
     /// For the table controls and dictionaries whose entries were looked up
     /// by name, their entries by name folded to lower case (see
@@ -336,9 +338,15 @@ pub(crate) struct IndexState {
     /// indexed under (its name is in it, not in the control).
     pub(crate) name_holders: HashMap<Handle, BTreeSet<Handle>>,
     /// The number of lists scanned to fill `names`, for tests.
+    #[cfg(test)]
     pub(crate) name_scans: usize,
     /// The new handles `Drawing::check_new` compared, for tests.
+    #[cfg(test)]
     pub(crate) pending_probes: usize,
+    /// The questions `Drawing::check_new` asked about new handles, for
+    /// tests.
+    #[cfg(test)]
+    pub(crate) pending_lookups: usize,
 }
 
 impl IndexState {
