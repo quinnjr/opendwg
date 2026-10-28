@@ -28,6 +28,7 @@
 //! [`Drawing::add_object`] would make them, with the same checks.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 use super::Drawing;
 use super::api::{names_eq, next_handles};
@@ -73,10 +74,10 @@ impl Repair {
 
     /// The copy of the drawing's object `h` to change, made on first use.
     fn edit(&mut self, d: &Drawing, h: Handle) -> Option<&mut Object> {
-        if !self.objects.contains_key(&h) {
-            self.objects.insert(h, d.objects.get(&h)?.clone());
+        match self.objects.entry(h) {
+            Entry::Occupied(e) => Some(e.into_mut()),
+            Entry::Vacant(e) => Some(e.insert(d.objects.get(&h)?.clone())),
         }
-        self.objects.get_mut(&h)
     }
 
     /// Add `obj` under handle `h`, allocated with seed `seed` (see
