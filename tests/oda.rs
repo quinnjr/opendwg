@@ -378,6 +378,12 @@ fn oda_accepts_roundtripped_corpus() {
     let mut p = pack::Pack::default();
     pack::corpus_files(&mut p);
     pack::edit_files(&mut p);
+    // As the sign-off pack checks: nothing failed to build, and a file is
+    // left out only for a corpus not fetched.
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    for (name, why) in &p.skipped {
+        assert!(why.contains("fetch-corpus"), "{name}: {why}");
+    }
     let files: Vec<PackFile> = p
         .files
         .into_iter()
