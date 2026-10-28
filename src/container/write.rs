@@ -44,7 +44,8 @@ use super::r2004::{
     SYSTEM_HEADER_LEN,
 };
 use super::{R2004_PLAIN_HEADER_LEN, RawSections, SectionMeta, SectionName, check_required};
-use crate::codec::{crc32, lz77_2004, page_checksum, page_header_mask, xor_r2004_file_header};
+use crate::codec::lz77_2004::Compressor;
+use crate::codec::{crc32, page_checksum, page_header_mask, xor_r2004_file_header};
 use crate::error::{Error, Result};
 use crate::version::Version;
 
@@ -325,8 +326,8 @@ fn put64(b: &mut Vec<u8>, v: u64) {
 
 /// A system page (ODS 4.3) holding `data`: header, compressed data and the header copy with
 /// sizes and checksum zeroed. Not padded.
-fn system_page(kind: u32, data: &[u8]) -> Result<Vec<u8>> {
-    let comp = lz77_2004::compress(data);
+fn system_page(kind: u32, data: &[u8], compressor: &mut Compressor) -> Result<Vec<u8>> {
+    let comp = compressor.compress(data);
     let sizes = u32::try_from(data.len())
         .ok()
         .zip(u32::try_from(comp.len()).ok())
@@ -373,6 +374,8 @@ pub fn write_r2018(raw: &RawSections) -> Result<Vec<u8>> {
     })?;
     let plans = plan(raw)?;
     let keystream = keystream();
+    // One compressor for every page: its matcher buffers are allocated once.
+    let mut compressor = Compressor::new();
     let mut order: Vec<usize> = (0..plans.len()).collect();
     order.sort_by_key(|&i| stream_rank(plans[i].name));
 
@@ -389,7 +392,7 @@ pub fn write_r2018(raw: &RawSections) -> Result<Vec<u8>> {
             let mut page = chunk.to_vec();
             page.resize(page_size, 0);
             let payload = if p.compressed {
-                lz77_2004::compress(&page)
+                compressor.compress(&page)
             } else {
                 page
             };
@@ -459,7 +462,7 @@ pub fn write_r2018(raw: &RawSections) -> Result<Vec<u8>> {
     }
     let section_map_id = number + 3;
     let page_map_id = number + 4;
-    let section_map = system_page(SECTION_MAP_KIND, &map)?;
+    let section_map = system_page(SECTION_MAP_KIND, &map, &mut compressor)?;
     let section_map_extent = u32::try_from(extent(section_map.len() as u64))
         .map_err(|_| Error::Encode("section map too large".into()))?;
     file.extend_from_slice(&section_map);
@@ -478,7 +481,7 @@ pub fn write_r2018(raw: &RawSections) -> Result<Vec<u8>> {
             put32(&mut data, n);
             put32(&mut data, size);
         }
-        let page = system_page(PAGE_MAP_KIND, &data)?;
+        let page = system_page(PAGE_MAP_KIND, &data, &mut compressor)?;
         let needed = u32::try_from(extent((page.len() + ENCRYPTED_LEN) as u64))
             .map_err(|_| Error::Encode("section page map too large".into()))?;
         if needed <= page_map_extent {
