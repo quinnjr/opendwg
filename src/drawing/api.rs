@@ -114,6 +114,14 @@ pub(super) fn next_handles(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The table entries [`Drawing::table_handles`] gave on this thread, for
+    /// tests: the work of reading a table, which a name lookup from the name
+    /// index does once per table, and a scan of the table at every lookup.
+    static TABLE_ENTRIES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The new handles of objects added together (a family: a polyline and
 /// its vertices), ascending, and the one way [`Drawing::check_new`] asks
 /// whether a handle is among them: a binary search, as a family's new
@@ -446,12 +454,15 @@ impl Drawing {
             _ => &[],
         };
         let mut seen = HashSet::new();
-        extra
+        let out: Vec<Handle> = extra
             .iter()
             .chain(&c.entries)
             .copied()
             .filter(|&h| h.0 != 0 && seen.insert(h))
-            .collect()
+            .collect();
+        #[cfg(test)]
+        TABLE_ENTRIES_READ.set(TABLE_ENTRIES_READ.get() + out.len());
+        out
     }
 
     fn table_iter<'a, T: 'a>(
@@ -2541,26 +2552,33 @@ mod tests {
 
     /// Adding k layers to a table of 100 or of 1000 reads the table's names
     /// once (the first lookup), whatever its size: a name check is a hash
-    /// lookup, not a scan of the table, and so is `layer_by_name`.
+    /// lookup, not a scan of the table, and so is `layer_by_name`. The work
+    /// counted is the table entries read, so a lookup that scans the table
+    /// (however it is written) is caught, not only one that rebuilds the
+    /// index.
     #[test]
     fn name_checks_are_independent_of_the_table_size() {
         let k = 50;
-        let mut scans = vec![];
+        let mut work = vec![];
         for size in [100, 1000] {
             let mut d = Drawing::new();
             for i in 0..size {
                 d.add_layer(Layer::new(&format!("L{i}"))).unwrap();
             }
-            let before = d.ref_index.lock().name_scans;
+            let scans = d.ref_index.lock().name_scans;
+            let read = TABLE_ENTRIES_READ.get();
             for i in 0..k {
                 d.add_layer(Layer::new(&format!("M{i}"))).unwrap();
                 assert!(d.layer_by_name(&format!("m{i}")).is_some());
             }
             assert!(d.add_layer(Layer::new("l7")).is_err());
-            scans.push((before, d.ref_index.lock().name_scans - before));
+            work.push((
+                d.ref_index.lock().name_scans - scans,
+                TABLE_ENTRIES_READ.get() - read,
+            ));
         }
-        assert_eq!(scans[0], scans[1], "independent of the table's size");
-        assert_eq!(scans[0].1, 0, "no scan once indexed");
+        assert_eq!(work[0], work[1], "independent of the table's size");
+        assert_eq!(work[0], (0, 0), "no table read once indexed");
     }
 
     /// The name index follows every change: a table entry renamed through
