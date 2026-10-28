@@ -216,12 +216,15 @@ fn raw_objects_reencode() {
             }
             // ACIS entities read before R2013 are written by the drawing
             // writer (R2000 SAT not at all): alone, they do not encode.
-            if let Object::Entity {
-                entity: Entity::Acis(a),
-                ..
-            } = obj
-                && a.payload.is_inline()
-            {
+            // Not a let chain: the crate's rust-version (1.85) has none.
+            let inline_acis = match obj {
+                Object::Entity {
+                    entity: Entity::Acis(a),
+                    ..
+                } if a.payload.is_inline() => Some(a),
+                _ => None,
+            };
+            if let Some(a) = inline_acis {
                 let want_unconvertible = !a.is_convertible();
                 assert_eq!(
                     matches!(out, Err(opendwg::Error::UnconvertibleObjects(_))),
