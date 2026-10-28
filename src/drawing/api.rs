@@ -45,8 +45,8 @@ use crate::object::Dictionary;
 use crate::object::tables::{HARD_OWNER, SOFT_OWNER, SOFT_POINTER};
 use crate::object::{
     Attrib, Block, BlockRecord, DictionaryWithDefault, DimStyle, Entity, EntityCommon, EntityList,
-    ImageDefReactor, Layer, Layout, Linetype, LinetypeRef, MInsert, NonGraphical, Object,
-    ObjWriter, ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, encode_entity_common,
+    ImageDefReactor, Layer, Layout, Linetype, LinetypeRef, MInsert, NonGraphical, ObjWriter,
+    Object, ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, encode_entity_common,
     encode_object_common, type_refs,
 };
 use crate::section::DxfClass;
@@ -73,6 +73,35 @@ pub(super) fn names_eq(a: &str, b: &str) -> bool {
 /// case exactly when their folded forms are equal.
 pub(super) fn fold_name(name: &str) -> String {
     name.chars().flat_map(char::to_lowercase).collect()
+}
+
+/// The `n` consecutive handles [`Drawing::alloc_handles`] gives when the
+/// seed is `seed` and the largest handle `last`, and the seed after them: a
+/// seed not above `last` is moved past it first (see
+/// `Drawing::normalise_seed`). [`Error::Invalid`] when the handles are used
+/// up.
+pub(super) fn next_handles(
+    seed: Handle,
+    last: Option<Handle>,
+    n: usize,
+) -> Result<(Vec<Handle>, Handle)> {
+    let seed = match last {
+        Some(last) if seed <= last => Handle(last.0.saturating_add(1)),
+        _ => seed,
+    };
+    let first = seed.0.max(1);
+    let past = last.is_none_or(|last| last.0 < first);
+    match u64::try_from(n).ok().and_then(|n| first.checked_add(n)) {
+        // `end` is at most the largest handle, never given.
+        Some(end) if past => Ok(((first..end).map(Handle).collect(), Handle(end))),
+        _ => Err(invalid(
+            None,
+            format!(
+                "the handles are used up: {n} more cannot be allocated above $HANDSEED {}",
+                Handle(first)
+            ),
+        )),
+    }
 }
 
 /// Whether `obj` owns a list R2000 stores as a first/last pair that was not
@@ -748,30 +777,13 @@ impl Drawing {
     /// Allocate `n` consecutive handles (see [`Drawing::alloc_handle`]); on
     /// error nothing changes, the seed included.
     fn alloc_handles(&mut self, n: usize) -> Result<Vec<Handle>> {
-        let seed = self.header.handseed;
-        self.normalise_seed();
-        let first = self.header.handseed.0.max(1);
-        let past = self
-            .objects
-            .last_key_value()
-            .is_none_or(|(last, _)| last.0 < first);
-        match u64::try_from(n).ok().and_then(|n| first.checked_add(n)) {
-            // `end` is at most the largest handle, never given.
-            Some(end) if past => {
-                self.header.handseed = Handle(end);
-                Ok((first..end).map(Handle).collect())
-            }
-            _ => {
+        let last = self.objects.last_key_value().map(|(&h, _)| h);
+        match next_handles(self.header.handseed, last, n) {
+            Ok((handles, seed)) => {
                 self.header.handseed = seed;
-                Err(invalid(
-                    None,
-                    format!(
-                        "the handles are used up: {n} more cannot be allocated above \
-                         $HANDSEED {}",
-                        Handle(first)
-                    ),
-                ))
+                Ok(handles)
             }
+            Err(e) => Err(e),
         }
     }
 
@@ -786,7 +798,7 @@ impl Drawing {
     /// refused); an entity's layer is a layer, its linetype a linetype, and
     /// a multiline has as many lines as its style has elements (the kind
     /// checks of `validate()`).
-    fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
+    pub(super) fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
         let common = obj.object_common();
         if common.xdict.is_some() {
             return Err(invalid(
@@ -2429,13 +2441,25 @@ mod tests {
         // Dictionary entries.
         let nod = d.named_objects();
         let x = d
-            .add_object(nod, "MY_DICT", NonGraphical::Dictionary(Dictionary::default()))
+            .add_object(
+                nod,
+                "MY_DICT",
+                NonGraphical::Dictionary(Dictionary::default()),
+            )
             .unwrap();
-        let dup = d.add_object(nod, "my_dict", NonGraphical::Dictionary(Dictionary::default()));
+        let dup = d.add_object(
+            nod,
+            "my_dict",
+            NonGraphical::Dictionary(Dictionary::default()),
+        );
         assert!(dup.is_err());
         d.remove(x).unwrap();
-        d.add_object(nod, "my_dict", NonGraphical::Dictionary(Dictionary::default()))
-            .unwrap();
+        d.add_object(
+            nod,
+            "my_dict",
+            NonGraphical::Dictionary(Dictionary::default()),
+        )
+        .unwrap();
         assert_index_fresh(&d);
     }
 

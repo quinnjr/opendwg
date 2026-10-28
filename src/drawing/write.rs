@@ -7,8 +7,9 @@
 //!    [`Error::UnconvertibleObjects`] (see [`Drawing::unconvertible_objects`]).
 //! 2. Required objects the drawing lacks and the writer can make (the
 //!    dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
-//!    dictionaries) are added to a copy, which is written instead, with a
-//!    warning each (see `drawing::repair`).
+//!    dictionaries) are added, with a warning each (see `drawing::repair`):
+//!    the new objects and the copies of the objects and header listing them
+//!    are laid over the drawing, as the refreshed copies below are.
 //!
 //!    The caches and derived values the drawing keeps as read are refreshed
 //!    on copies (the drawing itself is not changed), and objects R2018 does
@@ -373,9 +374,28 @@ pub(super) struct Changes {
     /// Warnings about what refreshing changed (see
     /// [`Drawing::write_diagnostics`]).
     warnings: Vec<Diagnostic>,
+    /// The objects the writer adds (see `drawing::repair`), whose objects
+    /// are in `replaced`: their handles, ascending, above every object's.
+    pub(super) added: Vec<Handle>,
+    /// The header as written, when the additions change it.
+    header: Option<Box<HeaderVars>>,
+    /// A warning per addition (see [`Drawing::validate`]).
+    pub(super) repairs: Vec<Diagnostic>,
 }
 
 impl Changes {
+    /// The header as written (but `$HANDSEED` and `$TDUPDATE`, which the
+    /// writer sets).
+    pub(super) fn header<'a>(&'a self, d: &'a Drawing) -> &'a HeaderVars {
+        self.header.as_deref().unwrap_or(&d.header)
+    }
+
+    /// Every object's handle, the drawing's and then the added ones, in
+    /// handle order (dropped ones included).
+    pub(super) fn handles<'a>(&'a self, d: &'a Drawing) -> impl Iterator<Item = Handle> + 'a {
+        d.objects.keys().copied().chain(self.added.iter().copied())
+    }
+
     /// The object as it will be written (`None` when dropped).
     pub(super) fn get<'a>(&'a self, d: &'a Drawing, h: Handle) -> Option<&'a Object> {
         if self.dropped.contains(&h) {
@@ -487,18 +507,14 @@ impl Drawing {
                 return Err(Error::UnconvertibleObjects(unconvertible));
             }
         }
-        if let Some((repaired, mut diags)) = self.repaired() {
-            let (bytes, more) = repaired.write(saved, work, dry_run)?;
-            diags.extend(more);
-            return Ok((bytes, diags));
-        }
         let mut changes = self.refreshed(work);
-        let mut diags = std::mem::take(&mut changes.warnings);
+        let mut diags = std::mem::take(&mut changes.repairs);
+        diags.append(&mut changes.warnings);
         if dry_run {
-            let written = self.objects.len() - changes.dropped.len();
+            let written = self.objects.len() + changes.added.len() - changes.dropped.len();
             // A layout that fails is one more warning: those found so far
             // are kept.
-            match self.sections(saved, written) {
+            match self.sections(saved, written, &changes) {
                 Ok((_, _, _, _, warnings)) => diags.extend(warnings),
                 Err(e) => diags.push(warning(None, format!("the file cannot be laid out: {e}"))),
             }
@@ -526,6 +542,7 @@ impl Drawing {
         &self,
         saved: JulianDate,
         objects: usize,
+        changes: &Changes,
     ) -> Result<(
         HeaderVars,
         Vec<u8>,
@@ -533,8 +550,8 @@ impl Drawing {
         BTreeMap<SectionName, Vec<u8>>,
         Vec<Diagnostic>,
     )> {
-        let mut header = self.header.clone();
-        header.handseed = self.next_handseed();
+        let mut header = changes.header(self).clone();
+        header.handseed = self.next_handseed(changes);
         header.tdupdate = saved;
         let summary = self.summary.clone().unwrap_or_default();
         let summary = summary.encode_r2018(&header)?;
@@ -557,7 +574,7 @@ impl Drawing {
         let mut map = Vec::with_capacity(self.objects.len());
         let mut counts: HashMap<u16, u32> = HashMap::new();
         let index = ClassIndex::new(&self.classes);
-        for h in self.write_order() {
+        for h in self.write_order(&changes) {
             let Some(obj) = changes.get(self, h) else {
                 continue;
             };
@@ -575,7 +592,7 @@ impl Drawing {
         work.class_probes += index.probes.get();
 
         let (header, summary, preview_address, mut sections, diags) =
-            self.sections(saved, map.len())?;
+            self.sections(saved, map.len(), &changes)?;
         let mut classes = self.classes.clone();
         for c in &mut classes {
             let now = counts.get(&c.class_number).copied().unwrap_or(0);
@@ -650,27 +667,30 @@ impl Drawing {
         Ok(diagnostics)
     }
 
-    /// $HANDSEED as written: above every handle, unless the largest handle
-    /// is the largest possible one (which validation refuses).
-    pub(super) fn next_handseed(&self) -> Handle {
-        let past = self
-            .objects
-            .last_key_value()
-            .map_or(1, |(h, _)| h.0.saturating_add(1));
-        Handle(self.header.handseed.0.max(past))
+    /// $HANDSEED as written: above every handle (the added objects'
+    /// included), unless the largest handle is the largest possible one
+    /// (which validation refuses).
+    pub(super) fn next_handseed(&self, changes: &Changes) -> Handle {
+        let past = changes
+            .handles(self)
+            .last()
+            .map_or(1, |h| h.0.saturating_add(1));
+        Handle(changes.header(self).handseed.0.max(past))
     }
 
-    /// The objects in write order: as read, then the others by handle.
-    fn write_order(&self) -> Vec<Handle> {
-        let mut seen = HashSet::with_capacity(self.objects.len());
+    /// The objects in write order: as read, then the others (the added
+    /// ones last) by handle.
+    fn write_order(&self, changes: &Changes) -> Vec<Handle> {
+        let added: HashSet<Handle> = changes.added.iter().copied().collect();
+        let mut seen = HashSet::with_capacity(self.objects.len() + added.len());
         let mut order: Vec<Handle> = self
             .read
             .order
             .iter()
             .copied()
-            .filter(|h| self.objects.contains_key(h) && seen.insert(*h))
+            .filter(|h| (self.objects.contains_key(h) || added.contains(h)) && seen.insert(*h))
             .collect();
-        order.extend(self.objects.keys().filter(|h| !seen.contains(h)));
+        order.extend(changes.handles(self).filter(|h| !seen.contains(h)));
         order
     }
 
@@ -768,6 +788,14 @@ impl Drawing {
     /// documentation).
     pub(super) fn refreshed(&self, work: &mut WriteWork) -> Changes {
         let mut changes = Changes::default();
+        // The required objects the writer adds come first: the refreshes
+        // see them as they would see objects of the drawing.
+        if let Some(repair) = self.repair() {
+            changes.replaced = repair.objects;
+            changes.added = repair.added;
+            changes.header = Some(Box::new(repair.header));
+            changes.repairs = repair.warnings;
+        }
         let Drops {
             dropped, owners, ..
         } = self.drops();
@@ -1215,7 +1243,8 @@ impl Drawing {
         let Some(records) = self.written_ds_records(changes) else {
             return;
         };
-        for &h in self.objects.keys() {
+        let handles: Vec<Handle> = changes.handles(self).collect();
+        for h in handles {
             let want = records.contains(&h);
             let stale = changes
                 .get(self, h)
@@ -2953,10 +2982,11 @@ mod tests {
                 let NonGraphical::Dictionary(x) = object.clone() else {
                     panic!()
                 };
-                *object = NonGraphical::DictionaryWithDefault(crate::object::DictionaryWithDefault {
-                    dictionary: x,
-                    default_entry: states,
-                });
+                *object =
+                    NonGraphical::DictionaryWithDefault(crate::object::DictionaryWithDefault {
+                        dictionary: x,
+                        default_entry: states,
+                    });
             }
             for h in [xdict, states] {
                 d.get_mut(h).unwrap().object_common_mut().owner = Handle(0);

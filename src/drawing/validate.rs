@@ -112,6 +112,7 @@ use crate::object::{
     ClassIndex, Entity, EntityList, LinetypeRef, MInsert, NonGraphical, Object, TableControl,
     TableKind, XRecordValue, written_type_code,
 };
+use crate::section::HeaderVars;
 use crate::section::classes::FIRST_CLASS_NUMBER;
 use crate::section::header::handle_vars;
 
@@ -272,14 +273,14 @@ impl Drawing {
     pub fn validate(&self) -> Vec<Diagnostic> {
         // Required objects the writer adds (see `drawing::repair`) are
         // warnings; the drawing is checked with them.
-        if let Some((repaired, mut found)) = self.repaired() {
-            found.extend(repaired.validate());
+        let changes = self.refreshed(&mut WriteWork::default());
+        let mut found = self.validate_written(&changes, &mut 0);
+        if !changes.repairs.is_empty() {
+            found.extend(changes.repairs.iter().cloned());
             found.sort_by(|a, b| (a.handle, &a.message).cmp(&(b.handle, &b.message)));
             found.dedup();
-            return found;
         }
-        let changes = self.refreshed(&mut WriteWork::default());
-        self.validate_written(&changes, &mut 0)
+        found
     }
 
     /// [`Drawing::validate`] with the writer's `changes`, counting the
@@ -304,14 +305,13 @@ impl Drawing {
                 )
             })
             .collect();
-        let unconvertible: HashSet<Handle> = self
-            .objects
-            .keys()
-            .filter(|&&h| changes.get(self, h).is_some_and(|o| !o.is_convertible()))
-            .copied()
+        let unconvertible: HashSet<Handle> = changes
+            .handles(self)
+            .filter(|&h| changes.get(self, h).is_some_and(|o| !o.is_convertible()))
             .collect();
         let mut v = Validator {
             d: self,
+            header: changes.header(self),
             changes,
             index,
             replaced,
@@ -350,6 +350,8 @@ struct CopyRefs {
 /// The drawing as it will be written, and the findings.
 struct Validator<'a> {
     d: &'a Drawing,
+    /// The header as written (see [`Changes::header`]).
+    header: &'a HeaderVars,
     changes: &'a Changes,
     index: &'a RefIndex,
     /// The references of the writer's copies (the index has the objects'
@@ -393,10 +395,10 @@ impl<'a> Validator<'a> {
     /// as R2018 (see [`Validator::unconvertible`]).
     fn objects(&self) -> impl Iterator<Item = (Handle, &'a Object)> + 'a {
         let (d, changes, skip) = (self.d, self.changes, self.unconvertible);
-        d.objects
-            .keys()
+        changes
+            .handles(d)
             .filter(move |h| !skip.contains(h))
-            .filter_map(move |&h| changes.get(d, h).map(|o| (h, o)))
+            .filter_map(move |h| changes.get(d, h).map(|o| (h, o)))
     }
 
     /// The classes: numbers from 500 and each used once, and each object of
@@ -509,7 +511,7 @@ impl<'a> Validator<'a> {
         match obj {
             Object::Entity { common, .. } => match common.entmode {
                 0 => common.obj.owner,
-                1 => self.d.header.block_record_paper_space,
+                1 => self.header.block_record_paper_space,
                 2 => self.model_space,
                 _ => Handle(0),
             },
@@ -519,7 +521,7 @@ impl<'a> Validator<'a> {
 
     /// Objects stored under the handle they give, below the seed.
     fn handles(&mut self) {
-        let seed = self.d.next_handseed();
+        let seed = self.d.next_handseed(self.changes);
         for (h, obj) in self.objects() {
             self.work += 1;
             let own = obj.handle();
@@ -983,7 +985,7 @@ impl<'a> Validator<'a> {
 
     /// The table control of `kind` named by the header, if it is one.
     fn control(&self, kind: TableKind) -> Option<(Handle, &'a TableControl)> {
-        let h = &self.d.header;
+        let h = self.header;
         let control = match kind {
             TableKind::Block => h.block_control,
             TableKind::Layer => h.layer_control,
@@ -1109,7 +1111,7 @@ impl<'a> Validator<'a> {
     /// The named object dictionary, its required entries, and the model
     /// and paper space layouts.
     fn named_objects(&mut self) {
-        let nod = self.d.header.dict_named_objects;
+        let nod = self.header.dict_named_objects;
         let Some((entries, _)) = self.get(nod).and_then(dictionary_entries) else {
             self.error(
                 None,
@@ -1157,7 +1159,7 @@ impl<'a> Validator<'a> {
         let lname = self.name(layouts);
         for (space, block) in [
             ("model space", self.model_space),
-            ("paper space", self.d.header.block_record_paper_space),
+            ("paper space", self.header.block_record_paper_space),
         ] {
             if !blocks.contains(&block) {
                 self.error(
@@ -1171,7 +1173,7 @@ impl<'a> Validator<'a> {
     /// Header handle variables (as written in R2018) name objects of their
     /// kind.
     fn header(&mut self) {
-        let header = &self.d.header;
+        let header = self.header;
         for (var, h, kind) in [
             ("$CLAYER", header.clayer, "LAYER"),
             ("$TEXTSTYLE", header.textstyle, "STYLE"),
