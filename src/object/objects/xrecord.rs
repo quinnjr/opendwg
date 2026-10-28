@@ -177,6 +177,9 @@ struct ItemReader<'a> {
     bytes: &'a [u8],
     pos: usize,
     version: Version,
+    /// The first code page of a pre-R2007 text that is not supported (read
+    /// as Windows-1252).
+    unsupported: Option<u16>,
 }
 
 impl ItemReader<'_> {
@@ -207,9 +210,13 @@ impl ItemReader<'_> {
                 text => Ok(text),
             })
         } else {
-            let codepage = self.array::<1>()?[0];
-            let bytes = self.take(n)?;
-            Some(Ok(strings::decode_checked(u16::from(codepage), bytes)))
+            let codepage = u16::from(self.array::<1>()?[0]);
+            let supported = strings::is_supported(codepage);
+            let text = strings::decode_checked(codepage, self.take(n)?);
+            if !supported {
+                self.unsupported.get_or_insert(codepage);
+            }
+            Some(Ok(text))
         }
     }
 
@@ -249,13 +256,15 @@ impl ItemReader<'_> {
 /// Parse extended record data bytes into items. An item that cannot be read
 /// as its type, or of a code with no type, ends the list as
 /// [`XRecordValue::Unknown`] with the rest of the bytes from the item's
-/// start. Returns the items
-/// and whether a text decoded lossily.
-fn parse_items(bytes: &[u8], version: Version) -> (Vec<(i16, XRecordValue)>, bool) {
+/// start. Returns the items, whether a text decoded lossily, and the first
+/// unsupported code page a pre-R2007 text named (it was read as
+/// Windows-1252).
+fn parse_items(bytes: &[u8], version: Version) -> (Vec<(i16, XRecordValue)>, bool, Option<u16>) {
     let mut r = ItemReader {
         bytes,
         pos: 0,
         version,
+        unsupported: None,
     };
     let mut items = Vec::new();
     let mut lossy = false;
@@ -264,7 +273,7 @@ fn parse_items(bytes: &[u8], version: Version) -> (Vec<(i16, XRecordValue)>, boo
         let Some(code) = r.array().map(i16::from_le_bytes) else {
             // A single trailing byte: no room for a group code.
             items.push((0, XRecordValue::Unknown(bytes[start..].to_vec())));
-            return (items, lossy);
+            return (items, lossy, r.unsupported);
         };
         match group_code_type(code).and_then(|t| r.value(t)) {
             Some((v, l)) => {
@@ -274,11 +283,11 @@ fn parse_items(bytes: &[u8], version: Version) -> (Vec<(i16, XRecordValue)>, boo
             None => {
                 let rest = bytes.get(start..).unwrap_or_default().to_vec();
                 items.push((code, XRecordValue::Unknown(rest)));
-                return (items, lossy);
+                return (items, lossy, r.unsupported);
             }
         }
     }
-    (items, lossy)
+    (items, lossy, r.unsupported)
 }
 
 /// Write extended record items as R2018 data bytes.
@@ -369,12 +378,23 @@ impl XRecord {
         let n = count(r.data.read_bl()?, "extended record byte")?;
         check_fits(r, n, 8, "extended record data")?;
         let bytes = r.data.read_bytes(n)?;
-        let (items, lossy) = parse_items(&bytes, r.version);
+        let (items, lossy, unsupported) = parse_items(&bytes, r.version);
         if lossy {
             r.diagnostics.push(crate::diag::Diagnostic {
                 severity: crate::diag::Severity::Warning,
                 handle: Some(r.handle),
                 message: "extended record text is malformed; it became U+FFFD".into(),
+            });
+        }
+        // As for extended data strings (see `object::common`).
+        if let Some(codepage) = unsupported {
+            r.diagnostics.push(crate::diag::Diagnostic {
+                severity: crate::diag::Severity::Warning,
+                handle: Some(r.handle),
+                message: format!(
+                    "extended record text code page {codepage} is not supported; read as \
+                     Windows-1252"
+                ),
             });
         }
         let cloning = r.data.read_bs()?;
@@ -636,8 +656,8 @@ pub(crate) mod tests {
             ),
         ];
         for (bytes, want) in cases {
-            let (items, lossy) = parse_items(bytes, v);
-            assert!(!lossy);
+            let (items, lossy, unsupported) = parse_items(bytes, v);
+            assert!(!lossy && unsupported.is_none());
             assert_eq!(items, want, "{bytes:02X?}");
             assert_eq!(items_bytes(&items).unwrap(), bytes, "{bytes:02X?}");
         }
@@ -705,6 +725,19 @@ pub(crate) mod tests {
         let x = XRecord::decode(&mut r).unwrap();
         assert!(!x.is_convertible());
         assert!(x.encode(&mut ObjWriter::new(H)).is_err());
+        // Text in a code page the library cannot decode is read as
+        // Windows-1252, with a warning (as extended data strings are).
+        let data = [0x01, 0x00, 0x02, 0x00, 0, b'h', b'i'];
+        let mut d = BitWriter::new();
+        d.write_bl(data.len() as i32);
+        d.write_bytes(&data);
+        d.write_bs(1);
+        let bytes = assemble(Version::R2004, 79, &d, None, &BitWriter::new());
+        let (mut r, _) = ObjReader::split(&bytes, Version::R2004, 30).unwrap();
+        let x = XRecord::decode(&mut r).unwrap();
+        assert_eq!(x.items, [(1, XRecordValue::Text("hi".into()))]);
+        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
+        assert!(r.diagnostics[0].message.contains("code page 0"));
         // The data length is checked before allocating.
         let mut d = BitWriter::new();
         d.write_bl(i32::MAX);
