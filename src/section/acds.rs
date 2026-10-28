@@ -856,12 +856,28 @@ impl DataStorage {
 
     /// The ACIS (SAB) data of entity `h`: its first record under
     /// [`ACIS_SCHEMA`].
+    ///
+    /// Records in data index order (by schema, then handle: as AutoCAD
+    /// writes them and [`DataStorage::set_acis_data`] keeps them) are found
+    /// by binary search. Records changed by hand out of that order are
+    /// searched one by one when the binary search misses; among several
+    /// records of `h` out of order, the one the binary search lands on may
+    /// be returned rather than the first.
     pub fn acis_data(&self, h: Handle) -> Option<&[u8]> {
         let schema = self.schema_index(ACIS_SCHEMA)?;
-        self.records
-            .iter()
-            .find(|r| r.schema == schema && r.handle == h)
-            .map(|r| r.data.as_slice())
+        let key = (schema, h);
+        let of = |r: &DataRecord| (r.schema, r.handle);
+        let at = self.records.partition_point(|r| of(r) < key);
+        let found = self.records.get(at).filter(|r| of(r) == key);
+        let first = at == 0 || of(&self.records[at - 1]) < key;
+        match found {
+            Some(r) if first => Some(r.data.as_slice()),
+            _ => self
+                .records
+                .iter()
+                .find(|r| of(r) == key)
+                .map(|r| r.data.as_slice()),
+        }
     }
 
     /// Set entity `h`'s ACIS data: its records under [`ACIS_SCHEMA`] are
@@ -1419,6 +1435,36 @@ mod tests {
         s.retain_acis(|h| h != Handle(0x50));
         assert_eq!(s.records.len(), 1);
         assert_eq!(s.acis_data(Handle(0x60)), Some(&[2][..]));
+    }
+
+    /// A record is found by binary search in records in data index order,
+    /// and one by one in records out of it (changed by hand); a handle with
+    /// no record, or a record under another schema, is not found.
+    #[test]
+    fn acis_data_found_sorted_or_not() {
+        let mut s = DataStorage::with_default_schemas();
+        let other = s.schema_index("AcDbDs::LegacySchema").unwrap();
+        s.set_acis_data_all((1..=1000u64).map(|i| (Handle(2 * i), vec![i as u8])));
+        s.records.push(DataRecord {
+            handle: Handle(3),
+            schema: other,
+            data: vec![0xEE],
+        });
+        s.records.sort_by_key(|r| (r.schema, r.handle));
+        assert!(s.records.is_sorted_by_key(|r| (r.schema, r.handle)));
+        let check = |s: &DataStorage| {
+            for i in [1u64, 2, 500, 999, 1000] {
+                assert_eq!(s.acis_data(Handle(2 * i)), Some(&[i as u8][..]), "{i}");
+            }
+            assert_eq!(s.acis_data(Handle(3)), None);
+            assert_eq!(s.acis_data(Handle(2001)), None);
+            assert_eq!(s.acis_data(Handle(0)), None);
+        };
+        check(&s);
+        s.records.reverse();
+        check(&s);
+        s.records.rotate_left(337);
+        check(&s);
     }
 
     /// Setting many records at once gives what setting them one by one
