@@ -447,12 +447,13 @@ impl Changes {
         d.objects.keys().copied().chain(self.added.iter().copied())
     }
 
-    /// The objects the refresh passes start from: the drawing's as stored
-    /// and the ones the writer adds (as `overlay` has them), dropped ones
-    /// included. A pass reads them, then edits what it changes
-    /// ([`Changes::edit`]).
-    pub(super) fn objects<'a>(&'a self, d: &'a Drawing) -> Base<'a> {
-        Base { d, changes: self }
+    /// The objects the refresh passes start from: the drawing's as stored,
+    /// not as refreshed, and the ones the writer adds (as `overlay` has
+    /// them), dropped ones included. A pass reads them, then edits what it
+    /// changes ([`Changes::edit`]); what an earlier pass changed is not seen
+    /// here, and [`Changes::get`] gives the objects as written.
+    pub(super) fn stored<'a>(&'a self, d: &'a Drawing) -> Stored<'a> {
+        Stored { d, changes: self }
     }
 
     /// The object as it will be written (`None` when dropped).
@@ -474,13 +475,14 @@ impl Changes {
     }
 }
 
-/// See [`Changes::objects`].
-pub(super) struct Base<'a> {
+/// The drawing's objects as stored and the objects the writer adds: see
+/// [`Changes::stored`].
+pub(super) struct Stored<'a> {
     d: &'a Drawing,
     changes: &'a Changes,
 }
 
-impl ObjectSet for Base<'_> {
+impl ObjectSet for Stored<'_> {
     fn object(&self, h: Handle) -> Option<&Object> {
         match self.d.objects.get(&h) {
             Some(o) => Some(o),
@@ -829,7 +831,7 @@ impl Drawing {
     pub(super) fn refreshed(&self, work: &mut WriteWork) -> Changes {
         let mut changes = Changes::default();
         // The required objects the writer adds come first: every pass after
-        // reads them with the drawing's (`Changes::objects`) and edits the
+        // reads them with the drawing's (`Changes::stored`) and edits the
         // overlay's copy (`Changes::edit`).
         if let Some(repair) = self.repair() {
             changes.overlay = repair.objects;
@@ -839,7 +841,7 @@ impl Drawing {
         }
         let Drops {
             dropped, owners, ..
-        } = self.drops(&changes.objects(self));
+        } = self.drops(&changes.stored(self));
         // An absorbed CELLSTYLEMAP leaves its dictionary and every reactor
         // list naming it.
         for &(dict, map) in &owners {
@@ -854,7 +856,7 @@ impl Drawing {
         if !owners.is_empty() {
             let gone: HashSet<Handle> = owners.iter().map(|&(_, m)| m).collect();
             let holders: Vec<Handle> = changes
-                .objects(self)
+                .stored(self)
                 .each()
                 .filter(|(h, o)| {
                     !gone.contains(h) && o.object_common().reactors.iter().any(|r| gone.contains(r))
@@ -905,7 +907,7 @@ impl Drawing {
     /// else its owner dictionary's entry for it.
     fn refresh_visual_styles(&self, changes: &mut Changes) {
         let codepage = self.header.dwgcodepage;
-        let base = changes.objects(self);
+        let base = changes.stored(self);
         let mut found = Vec::new();
         for (h, obj) in base.each() {
             if !Self::replaced_visual_style(obj) {
@@ -1013,7 +1015,7 @@ impl Drawing {
     fn refresh_entity_owners(&self, changes: &mut Changes) {
         let model = self.model_space();
         let paper = self.header.block_record_paper_space;
-        for (e, block, w) in self.misowned_entities(&changes.objects(self)) {
+        for (e, block, w) in self.misowned_entities(&changes.stored(self)) {
             if let Some(Object::Entity { common, .. }) = changes.edit(self, e) {
                 let (entmode, owner) = if block == model {
                     (2, Handle(0))
@@ -1084,7 +1086,7 @@ impl Drawing {
     /// Set the null owners [`Drawing::null_owners`] finds (step 2), but not
     /// to a lister the writer leaves out.
     fn refresh_null_owners(&self, changes: &mut Changes) {
-        for (child, owner, w) in Self::null_owners(&changes.objects(self)) {
+        for (child, owner, w) in Self::null_owners(&changes.stored(self)) {
             if changes.dropped.contains(&owner) {
                 continue;
             }
@@ -1143,7 +1145,7 @@ impl Drawing {
     /// view has is cleared (a null handle), with a warning: the layout is
     /// still written, as the Model and paper layouts cannot be removed.
     fn refresh_plot_views(&self, changes: &mut Changes) {
-        for (h, found) in Self::plot_view_names(&changes.objects(self)) {
+        for (h, found) in Self::plot_view_names(&changes.stored(self)) {
             let view = match found {
                 Ok(view) => view,
                 Err(w) => {
@@ -1173,7 +1175,7 @@ impl Drawing {
     /// ATTDEFs are gone, in every corpus sample); otherwise, and for a block
     /// added since, it is the derived value.
     fn refresh_attdef_flags(&self, changes: &mut Changes) {
-        let base = changes.objects(self);
+        let base = changes.stored(self);
         let mut stale = Vec::new();
         for (h, obj) in base.each() {
             let Object::Other {
@@ -1211,7 +1213,7 @@ impl Drawing {
     /// `changes.acis_data`.
     fn convert_acis(&self, changes: &mut Changes) {
         let mut converted = Vec::new();
-        for (h, obj) in changes.objects(self).each() {
+        for (h, obj) in changes.stored(self).each() {
             let Object::Entity {
                 entity: Entity::Acis(a),
                 ..
@@ -1393,7 +1395,7 @@ impl Drawing {
     /// (consistent counts are kept, and the mesh written as read). Counts
     /// too large for their field are left for validation to report.
     fn refresh_meshes(&self, changes: &mut Changes) {
-        let base = changes.objects(self);
+        let base = changes.stored(self);
         let mut stale = Vec::new();
         for (h, obj) in base.each() {
             let Object::Entity {
@@ -1440,7 +1442,7 @@ impl Drawing {
     /// Flags already so are kept, and the vertex written as read.
     fn refresh_vertex_flags(&self, changes: &mut Changes) {
         let stale: Vec<(Handle, u8)> = changes
-            .objects(self)
+            .stored(self)
             .each()
             .filter_map(|(h, obj)| match obj {
                 Object::Entity { entity, .. } => match vertex_flags(entity)? {
@@ -1469,7 +1471,7 @@ impl Drawing {
     /// layouts keep their list, but entries naming no object are dropped,
     /// with a warning. Returns the block entity list entries walked.
     fn refresh_layout_viewports(&self, changes: &mut Changes) -> usize {
-        let base = changes.objects(self);
+        let base = changes.stored(self);
         let (lists, steps) = own_layout_viewports(&base);
         let named_back: HashSet<Handle> = lists.iter().map(|(h, _)| *h).collect();
         let mut stale = Vec::new();
@@ -1578,7 +1580,7 @@ impl Drawing {
     /// list and the new ones follow in handle order; entries AutoCAD keeps
     /// for erased objects stay.
     fn refresh_block_inserts(&self, changes: &mut Changes) {
-        let base = changes.objects(self);
+        let base = changes.stored(self);
         let users = block_references(&base);
         let mut stale = Vec::new();
         for (h, obj) in base.each() {

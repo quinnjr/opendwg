@@ -519,8 +519,8 @@ fn resolve_mline_style_linetypes(objects: &mut BTreeMap<Handle, Object>) {
     }
 }
 
-/// Objects by handle: a drawing's, or the writer's view of them (see
-/// `Changes::objects`), for the passes that read either.
+/// Objects by handle: a drawing's, or those plus the objects the writer adds
+/// (see `Changes::stored`), for the passes that read either.
 pub(crate) trait ObjectSet {
     /// Object `h`.
     fn object(&self, h: Handle) -> Option<&Object>;

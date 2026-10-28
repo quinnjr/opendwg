@@ -487,7 +487,7 @@ mod tests {
         let changes = all.refreshed(&mut super::super::write::WriteWork::default());
         assert_eq!((changes.added.len(), changes.overlay.len()), (3, 5));
         // The refresh passes read the added objects with the drawing's.
-        let base = changes.objects(&all);
+        let base = changes.stored(&all);
         let seen: Vec<Handle> = base.each().map(|(h, _)| h).collect();
         assert_eq!(seen.len(), all.objects.len() + 3);
         assert!(seen.windows(2).all(|w| w[0] < w[1]));
