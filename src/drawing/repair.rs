@@ -139,16 +139,6 @@ impl Drawing {
                 )));
             }
         }
-        // The write's refresh passes that enumerate the drawing's objects
-        // do not see the added ones (see `Drawing::refreshed`): only kinds
-        // none of them would change are added.
-        debug_assert!(r.added.iter().all(|h| matches!(
-            r.objects.get(h),
-            Some(Object::Other {
-                object: NonGraphical::DimStyle(_) | NonGraphical::Dictionary(_),
-                ..
-            })
-        )));
         (!r.warnings.is_empty()).then_some(r)
     }
 
@@ -304,6 +294,7 @@ impl Drawing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drawing::ObjectSet;
 
     fn errors(d: &Drawing) -> Vec<Diagnostic> {
         d.validate()
@@ -479,7 +470,15 @@ mod tests {
         // the DIMSTYLE control and the named object dictionary.
         let all = strip(true, &both, true, false);
         let changes = all.refreshed(&mut super::super::write::WriteWork::default());
-        assert_eq!((changes.added.len(), changes.replaced.len()), (3, 5));
+        assert_eq!((changes.added.len(), changes.overlay.len()), (3, 5));
+        // The refresh passes read the added objects with the drawing's.
+        let base = changes.objects(&all);
+        let seen: Vec<Handle> = base.each().map(|(h, _)| h).collect();
+        assert_eq!(seen.len(), all.objects.len() + 3);
+        assert!(seen.windows(2).all(|w| w[0] < w[1]));
+        for h in &changes.added {
+            assert!(seen.contains(h) && base.object(*h).is_some(), "{h}");
+        }
         for (i, d) in [
             strip(true, &[], true, false),
             strip(false, &["ACAD_GROUP"], true, false),

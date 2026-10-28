@@ -266,8 +266,8 @@ impl Drawing {
     pub(super) fn validate_written(&self, changes: &Changes, work: &mut usize) -> Vec<Diagnostic> {
         let mut state = self.ref_index.lock();
         let index = state.ensure(&self.objects);
-        let replaced = changes
-            .replaced
+        let overlay = changes
+            .overlay
             .iter()
             .map(|(&h, o)| {
                 let refs = object_refs(o).0;
@@ -292,7 +292,7 @@ impl Drawing {
             header: changes.header(self),
             changes,
             index,
-            replaced,
+            overlay,
             model_space: self.model_space(),
             unconvertible: &unconvertible,
             out: Vec::new(),
@@ -334,7 +334,7 @@ struct Validator<'a> {
     index: &'a RefIndex,
     /// The references of the writer's copies (the index has the objects'
     /// as they are), as a list and a set of targets.
-    replaced: HashMap<Handle, CopyRefs>,
+    overlay: HashMap<Handle, CopyRefs>,
     model_space: Handle,
     /// The objects that cannot be written as R2018 (raw objects of R2000 and
     /// R2004, ...; see [`Drawing::unconvertible_objects`]): the writer
@@ -461,7 +461,7 @@ impl<'a> Validator<'a> {
 
     /// The references of `h` (see `drawing::refs::object_refs`).
     fn refs(&self, h: Handle) -> &[(Handle, u8)] {
-        match self.replaced.get(&h) {
+        match self.overlay.get(&h) {
             Some(c) => &c.refs,
             None => self.index.refs_of(h),
         }
@@ -469,7 +469,7 @@ impl<'a> Validator<'a> {
 
     /// Whether `from` refers to `to`.
     fn refers(&self, from: Handle, to: Handle) -> bool {
-        match self.replaced.get(&from) {
+        match self.overlay.get(&from) {
             Some(c) => c.targets.contains(&to),
             None => self.index.refers(from, to),
         }
@@ -477,7 +477,7 @@ impl<'a> Validator<'a> {
 
     /// Whether `holder` names `r` among its reactors (one lookup).
     fn has_reactor(&self, holder: Handle, r: Handle) -> bool {
-        match self.replaced.get(&holder) {
+        match self.overlay.get(&holder) {
             Some(c) => c.reactors.contains(&r),
             None => self.index.holds_reactor(holder, r),
         }
@@ -1400,7 +1400,7 @@ mod tests {
         assert!(flag(0x31));
         // The guard itself: written copies that disagree are errors.
         let mut stale = d.refreshed(&mut WriteWork::default());
-        stale.replaced.insert(h, obj);
+        stale.overlay.insert(h, obj);
         let found: Vec<_> = d
             .validate_written(&stale, &mut 0)
             .into_iter()

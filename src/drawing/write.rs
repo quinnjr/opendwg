@@ -140,7 +140,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::Path;
 
-use super::{Drawing, own_layout_viewports};
+use super::{Drawing, ObjectSet, own_layout_viewports};
 use crate::container::{
     R2004_PLAIN_HEADER_LEN, RawSections, SectionMeta, SectionName, r2018_preview_address,
     write_r2018,
@@ -267,14 +267,50 @@ fn block_reference(obj: &Object) -> Option<Handle> {
 }
 
 /// The block references of every block record, in handle order.
-fn block_references(objects: &BTreeMap<Handle, Object>) -> HashMap<Handle, Vec<Handle>> {
+fn block_references(objects: &impl ObjectSet) -> HashMap<Handle, Vec<Handle>> {
     let mut users: HashMap<Handle, Vec<Handle>> = HashMap::new();
-    for (&h, obj) in objects {
+    for (h, obj) in objects.each() {
         if let Some(b) = block_reference(obj) {
             users.entry(b).or_default().push(h);
         }
     }
     users
+}
+
+/// For a pre-R2010 table style converted to the R2010 form, the
+/// CELLSTYLEMAP its extension dictionary `xdict` lists under
+/// `ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP`, as (dictionary, map):
+/// its content is the converted style's cell styles. Only a raw
+/// CELLSTYLEMAP read before R2010 without an extension dictionary of its
+/// own qualifies.
+fn absorbed_cell_style_map(
+    objects: &impl ObjectSet,
+    xdict: Option<Handle>,
+    style: &crate::object::TableStyle,
+) -> Option<(Handle, Handle)> {
+    use crate::object::TableStyle;
+    if !matches!(style, TableStyle::Legacy(_)) || !style.is_convertible() {
+        return None;
+    }
+    let dict = xdict?;
+    let Some(Object::Other {
+        object: NonGraphical::Dictionary(d),
+        ..
+    }) = objects.object(dict)
+    else {
+        return None;
+    };
+    let &(_, map) = d
+        .entries
+        .iter()
+        .find(|(name, _)| name == "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP")?;
+    let obj = objects.object(map)?;
+    let raw = obj.raw()?;
+    (raw.class_name.as_deref() == Some("CELLSTYLEMAP")
+        && raw.source_version < Version::R2010
+        && obj.object_common().xdict.is_none()
+        && obj.object_common().owner == dict)
+        .then_some((dict, map))
 }
 
 /// The class (by number) an object counts toward: the class its type code
@@ -354,11 +390,12 @@ struct Drops {
     blocked: BTreeSet<Handle>,
 }
 
-/// Objects the writer replaces or leaves out.
+/// Objects the writer replaces, adds or leaves out.
 #[derive(Debug, Default)]
 pub(super) struct Changes {
-    /// Refreshed copies, by handle.
-    pub(super) replaced: BTreeMap<Handle, Object>,
+    /// The objects as written where they are not the drawing's: refreshed
+    /// copies of the drawing's, and the objects the writer adds, by handle.
+    pub(super) overlay: BTreeMap<Handle, Object>,
     /// Objects not written.
     pub(super) dropped: BTreeSet<Handle>,
     /// The SAB data of ACIS entities converted from older versions, for
@@ -374,7 +411,7 @@ pub(super) struct Changes {
     /// [`Drawing::write_diagnostics`]).
     warnings: Vec<Diagnostic>,
     /// The objects the writer adds (see `drawing::repair`), whose objects
-    /// are in `replaced`: their handles, ascending, above every object's.
+    /// are in `overlay`: their handles, ascending, above every object's.
     pub(super) added: Vec<Handle>,
     /// The header as written, when the additions change it.
     header: Option<Box<HeaderVars>>,
@@ -395,22 +432,54 @@ impl Changes {
         d.objects.keys().copied().chain(self.added.iter().copied())
     }
 
+    /// The objects the refresh passes start from: the drawing's as stored
+    /// and the ones the writer adds (as `overlay` has them), dropped ones
+    /// included. A pass reads them, then edits what it changes
+    /// ([`Changes::edit`]).
+    pub(super) fn objects<'a>(&'a self, d: &'a Drawing) -> Base<'a> {
+        Base { d, changes: self }
+    }
+
     /// The object as it will be written (`None` when dropped).
     pub(super) fn get<'a>(&'a self, d: &'a Drawing, h: Handle) -> Option<&'a Object> {
         if self.dropped.contains(&h) {
             return None;
         }
-        self.replaced.get(&h).or_else(|| d.objects.get(&h))
+        self.overlay.get(&h).or_else(|| d.objects.get(&h))
     }
 
     /// The copy of object `h` to change, made on first use.
     fn edit(&mut self, d: &Drawing, h: Handle) -> Option<&mut Object> {
-        match self.replaced.entry(h) {
+        match self.overlay.entry(h) {
             std::collections::btree_map::Entry::Occupied(e) => Some(e.into_mut()),
             std::collections::btree_map::Entry::Vacant(e) => {
                 Some(e.insert(d.objects.get(&h)?.clone()))
             }
         }
+    }
+}
+
+/// See [`Changes::objects`].
+pub(super) struct Base<'a> {
+    d: &'a Drawing,
+    changes: &'a Changes,
+}
+
+impl ObjectSet for Base<'_> {
+    fn object(&self, h: Handle) -> Option<&Object> {
+        match self.d.objects.get(&h) {
+            Some(o) => Some(o),
+            None if self.changes.added.binary_search(&h).is_ok() => self.changes.overlay.get(&h),
+            None => None,
+        }
+    }
+
+    fn each(&self) -> impl Iterator<Item = (Handle, &Object)> {
+        let added = self.changes.added.iter();
+        self.d
+            .objects
+            .each()
+            .chain(added.filter_map(|&h| Some((h, self.changes.overlay.get(&h)?))))
     }
 }
 
@@ -432,7 +501,7 @@ impl Drawing {
     /// except a VP_ENT_HDR or its control that has an extension dictionary or
     /// is another object's reactor: leaving it out would break those links.
     pub fn unconvertible_objects(&self) -> Vec<(Handle, String)> {
-        let drops = self.drops();
+        let drops = self.drops(&self.objects);
         self.objects
             .iter()
             .filter(|(h, o)| {
@@ -697,10 +766,10 @@ impl Drawing {
     /// dictionary listing each absorbed CELLSTYLEMAP, and the members of the
     /// VP_ENT_HDR table that cannot be left out: those with an extension
     /// dictionary or named among another object's reactors.
-    fn drops(&self) -> Drops {
+    fn drops(&self, objects: &impl ObjectSet) -> Drops {
         let mut drops = Drops::default();
         let mut vp_table = Vec::new();
-        for (&h, obj) in &self.objects {
+        for (h, obj) in objects.each() {
             match obj {
                 Object::Other {
                     object: NonGraphical::VpEntHdr(_),
@@ -714,7 +783,7 @@ impl Drawing {
                     common,
                     object: NonGraphical::TableStyle(t),
                 } => {
-                    if let Some(entry) = self.absorbed_cell_style_map(common.xdict, t) {
+                    if let Some(entry) = absorbed_cell_style_map(objects, common.xdict, t) {
                         drops.dropped.insert(entry.1);
                         drops.owners.push(entry);
                     }
@@ -724,17 +793,15 @@ impl Drawing {
         }
         if !vp_table.is_empty() {
             let members: HashSet<Handle> = vp_table.iter().copied().collect();
-            let reactor_of_others: HashSet<Handle> = self
-                .objects
-                .iter()
+            let reactor_of_others: HashSet<Handle> = objects
+                .each()
                 .filter(|(h, _)| !members.contains(h))
                 .flat_map(|(_, o)| o.object_common().reactors.iter().copied())
                 .filter(|r| members.contains(r))
                 .collect();
             for h in vp_table {
-                let has_xdict = self
-                    .objects
-                    .get(&h)
+                let has_xdict = objects
+                    .object(h)
                     .is_some_and(|o| o.object_common().xdict.is_some());
                 if has_xdict || reactor_of_others.contains(&h) {
                     drops.blocked.insert(h);
@@ -746,64 +813,23 @@ impl Drawing {
         drops
     }
 
-    /// For a pre-R2010 table style converted to the R2010 form, the
-    /// CELLSTYLEMAP its extension dictionary `xdict` lists under
-    /// `ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP`, as (dictionary, map):
-    /// its content is the converted style's cell styles. Only a raw
-    /// CELLSTYLEMAP read before R2010 without an extension dictionary of its
-    /// own qualifies.
-    fn absorbed_cell_style_map(
-        &self,
-        xdict: Option<Handle>,
-        style: &crate::object::TableStyle,
-    ) -> Option<(Handle, Handle)> {
-        use crate::object::TableStyle;
-        if !matches!(style, TableStyle::Legacy(_)) || !style.is_convertible() {
-            return None;
-        }
-        let dict = xdict?;
-        let Some(Object::Other {
-            object: NonGraphical::Dictionary(d),
-            ..
-        }) = self.objects.get(&dict)
-        else {
-            return None;
-        };
-        let &(_, map) = d
-            .entries
-            .iter()
-            .find(|(name, _)| name == "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP")?;
-        let obj = self.objects.get(&map)?;
-        let raw = obj.raw()?;
-        (raw.class_name.as_deref() == Some("CELLSTYLEMAP")
-            && raw.source_version < Version::R2010
-            && obj.object_common().xdict.is_none()
-            && obj.object_common().owner == dict)
-            .then_some((dict, map))
-    }
-
     /// The refreshed copies of the objects whose caches or derived values
     /// changed, and the objects left out (step 2 of the module
     /// documentation).
     pub(super) fn refreshed(&self, work: &mut WriteWork) -> Changes {
         let mut changes = Changes::default();
-        // The required objects the writer adds come first. A refresh that
-        // edits an object starts from the overlay's copy (`Changes::edit`),
-        // and those that go through `Changes::handles` (data storage flags,
-        // validation) see the added objects; the passes that enumerate
-        // `self.objects` do not. That is enough for what is added today, a
-        // DIMSTYLE and empty dictionaries, which none of those passes would
-        // change (`repair` asserts it); an addition of another kind would
-        // need them to enumerate the added objects too.
+        // The required objects the writer adds come first: every pass after
+        // reads them with the drawing's (`Changes::objects`) and edits the
+        // overlay's copy (`Changes::edit`).
         if let Some(repair) = self.repair() {
-            changes.replaced = repair.objects;
+            changes.overlay = repair.objects;
             changes.added = repair.added;
             changes.header = Some(Box::new(repair.header));
             changes.repairs = repair.warnings;
         }
         let Drops {
             dropped, owners, ..
-        } = self.drops();
+        } = self.drops(&changes.objects(self));
         // An absorbed CELLSTYLEMAP leaves its dictionary and every reactor
         // list naming it.
         for &(dict, map) in &owners {
@@ -817,13 +843,13 @@ impl Drawing {
         }
         if !owners.is_empty() {
             let gone: HashSet<Handle> = owners.iter().map(|&(_, m)| m).collect();
-            let holders: Vec<Handle> = self
-                .objects
-                .iter()
+            let holders: Vec<Handle> = changes
+                .objects(self)
+                .each()
                 .filter(|(h, o)| {
                     !gone.contains(h) && o.object_common().reactors.iter().any(|r| gone.contains(r))
                 })
-                .map(|(&h, _)| h)
+                .map(|(h, _)| h)
                 .collect();
             for h in holders {
                 if let Some(obj) = changes.edit(self, h) {
@@ -869,7 +895,9 @@ impl Drawing {
     /// else its owner dictionary's entry for it.
     fn refresh_visual_styles(&self, changes: &mut Changes) {
         let codepage = self.header.dwgcodepage;
-        for (&h, obj) in &self.objects {
+        let base = changes.objects(self);
+        let mut found = Vec::new();
+        for (h, obj) in base.each() {
             if !Self::replaced_visual_style(obj) {
                 continue;
             }
@@ -880,7 +908,7 @@ impl Drawing {
             else {
                 continue;
             };
-            let listed = || match self.objects.get(&common.owner) {
+            let listed = || match base.object(common.owner) {
                 Some(Object::Other {
                     object: NonGraphical::Dictionary(d),
                     ..
@@ -908,20 +936,14 @@ impl Drawing {
                     "a style with 2dWireframe's settings under its own name"
                 }
             );
+            found.push((h, style, message));
+        }
+        for (h, style, message) in found {
             // The common data as refreshed so far (a null owner set, the
             // data storage flag derived, ...), not as stored.
-            let common = changes
-                .replaced
-                .get(&h)
-                .map_or(common, Object::object_common)
-                .clone();
-            changes.replaced.insert(
-                h,
-                Object::Other {
-                    common,
-                    object: NonGraphical::VisualStyle(Box::new(style)),
-                },
-            );
+            if let Some(Object::Other { object, .. }) = changes.edit(self, h) {
+                *object = NonGraphical::VisualStyle(Box::new(style));
+            }
             changes.warnings.push(warning(Some(h), message));
         }
     }
@@ -931,9 +953,9 @@ impl Drawing {
     /// warning. The list is what AutoCAD draws the entity in; the owner
     /// only repeats it. An entity listed by two blocks, or by none, is left
     /// to `validate()`, which refuses it.
-    fn misowned_entities(&self) -> Vec<(Handle, Handle, Diagnostic)> {
+    fn misowned_entities(&self, objects: &impl ObjectSet) -> Vec<(Handle, Handle, Diagnostic)> {
         let mut listers: HashMap<Handle, (Handle, usize)> = HashMap::new();
-        for (&b, obj) in &self.objects {
+        for (b, obj) in objects.each() {
             if let Object::Other {
                 object: NonGraphical::BlockRecord(rec),
                 ..
@@ -951,13 +973,13 @@ impl Drawing {
             .into_iter()
             .filter(|&(e, (b, n))| {
                 n == 1
-                    && matches!(self.objects.get(&e), Some(Object::Entity { .. }))
+                    && matches!(objects.object(e), Some(Object::Entity { .. }))
                     && self.owner_of(e) != Some(b)
             })
             .map(|(e, (b, _))| {
                 let name = |h: Handle| {
-                    self.objects
-                        .get(&h)
+                    objects
+                        .object(h)
                         .map_or_else(|| h.to_string(), |o| format!("{} {h}", o.type_name()))
                 };
                 let owner = self.owner_of(e).unwrap_or_default();
@@ -981,7 +1003,7 @@ impl Drawing {
     fn refresh_entity_owners(&self, changes: &mut Changes) {
         let model = self.model_space();
         let paper = self.header.block_record_paper_space;
-        for (e, block, w) in self.misowned_entities() {
+        for (e, block, w) in self.misowned_entities(&changes.objects(self)) {
             if let Some(Object::Entity { common, .. }) = changes.edit(self, e) {
                 let (entmode, owner) = if block == model {
                     (2, Handle(0))
@@ -1005,18 +1027,18 @@ impl Drawing {
     /// XRECORD so (`arx-02`, `arx-03` of the extended corpus). An object
     /// two objects list is left to `validate()`, which refuses it: which
     /// one owns it is not known.
-    fn null_owners(&self) -> Vec<(Handle, Handle, Diagnostic)> {
-        let null = |h: Handle| matches!(self.objects.get(&h), Some(Object::Other { common, .. }) if common.owner.0 == 0);
+    fn null_owners(objects: &impl ObjectSet) -> Vec<(Handle, Handle, Diagnostic)> {
+        let null = |h: Handle| matches!(objects.object(h), Some(Object::Other { common, .. }) if common.owner.0 == 0);
         let name = |h: Handle| {
-            self.objects
-                .get(&h)
+            objects
+                .object(h)
                 .map_or_else(|| h.to_string(), |o| format!("{} {h}", o.type_name()))
         };
         // For each child, its listers and how the first lists it, in the
         // order first found.
         let mut found: Vec<(Handle, Handle, &str)> = Vec::new();
         let mut listers: HashMap<Handle, BTreeSet<Handle>> = HashMap::new();
-        for (&h, obj) in &self.objects {
+        for (h, obj) in objects.each() {
             let mut listed = Vec::new();
             if let Some(x) = obj.object_common().xdict {
                 listed.push((x, "its extension dictionary"));
@@ -1052,7 +1074,7 @@ impl Drawing {
     /// Set the null owners [`Drawing::null_owners`] finds (step 2), but not
     /// to a lister the writer leaves out.
     fn refresh_null_owners(&self, changes: &mut Changes) {
-        for (child, owner, w) in self.null_owners() {
+        for (child, owner, w) in Self::null_owners(&changes.objects(self)) {
             if changes.dropped.contains(&owner) {
                 continue;
             }
@@ -1066,10 +1088,12 @@ impl Drawing {
     /// The layouts and plot settings that name a plot view (R2000) and have
     /// no handle for it, with the handle of the VIEW of that name (compared
     /// without case), or the warning when no view has it.
-    fn plot_view_names(&self) -> Vec<(Handle, std::result::Result<Handle, Diagnostic>)> {
+    fn plot_view_names(
+        objects: &impl ObjectSet,
+    ) -> Vec<(Handle, std::result::Result<Handle, Diagnostic>)> {
         let mut views = None;
         let mut out = Vec::new();
-        for (&h, obj) in &self.objects {
+        for (h, obj) in objects.each() {
             let (plot, what) = match obj {
                 Object::Other {
                     object: NonGraphical::Layout(l),
@@ -1084,7 +1108,7 @@ impl Drawing {
             if plot.plot_view.0 != 0 || plot.plot_view_name.is_empty() {
                 continue;
             }
-            let views = views.get_or_insert_with(|| super::views_by_name(&self.objects));
+            let views = views.get_or_insert_with(|| super::views_by_name(objects));
             out.push((
                 h,
                 views
@@ -1109,7 +1133,7 @@ impl Drawing {
     /// view has is cleared (a null handle), with a warning: the layout is
     /// still written, as the Model and paper layouts cannot be removed.
     fn refresh_plot_views(&self, changes: &mut Changes) {
-        for (h, found) in self.plot_view_names() {
+        for (h, found) in Self::plot_view_names(&changes.objects(self)) {
             let view = match found {
                 Ok(view) => view,
                 Err(w) => {
@@ -1139,7 +1163,9 @@ impl Drawing {
     /// ATTDEFs are gone, in every corpus sample); otherwise, and for a block
     /// added since, it is the derived value.
     fn refresh_attdef_flags(&self, changes: &mut Changes) {
-        for (&h, obj) in &self.objects {
+        let base = changes.objects(self);
+        let mut stale = Vec::new();
+        for (h, obj) in base.each() {
             let Object::Other {
                 object: NonGraphical::BlockRecord(b),
                 ..
@@ -1150,19 +1176,22 @@ impl Drawing {
             if matches!(b.entities, EntityList::Linked { .. }) {
                 continue;
             }
-            let holds = holds_attdef(&self.objects, &b.entities);
+            let holds = holds_attdef(&base, &b.entities);
             let want = match self.read.attdefs.get(&h) {
                 Some(&(held, stored)) if held == holds => stored,
                 _ => holds,
             };
             if want != b.has_attdefs {
-                if let Some(Object::Other {
-                    object: NonGraphical::BlockRecord(b),
-                    ..
-                }) = changes.edit(self, h)
-                {
-                    b.has_attdefs = want;
-                }
+                stale.push((h, want));
+            }
+        }
+        for (h, want) in stale {
+            if let Some(Object::Other {
+                object: NonGraphical::BlockRecord(b),
+                ..
+            }) = changes.edit(self, h)
+            {
+                b.has_attdefs = want;
             }
         }
     }
@@ -1171,7 +1200,8 @@ impl Drawing {
     /// GUID derived from $FINGERPRINTGUID and the handle; their SAB goes to
     /// `changes.acis_data`.
     fn convert_acis(&self, changes: &mut Changes) {
-        for (&h, obj) in &self.objects {
+        let mut converted = Vec::new();
+        for (h, obj) in changes.objects(self).each() {
             let Object::Entity {
                 entity: Entity::Acis(a),
                 ..
@@ -1184,9 +1214,11 @@ impl Drawing {
             }
             let guid = AcisGuid::derived(&self.header.fingerprintguid, h);
             // An entity that cannot be converted was refused before.
-            let Some((converted, data)) = a.to_r2013(guid) else {
-                continue;
-            };
+            if let Some(c) = a.to_r2013(guid) {
+                converted.push((h, c));
+            }
+        }
+        for (h, (converted, data)) in converted {
             if let Some(Object::Entity {
                 entity: Entity::Acis(x),
                 ..
@@ -1311,10 +1343,9 @@ impl Drawing {
                     .map(|r| r.handle)
                     .collect()
             });
-            let missing: Vec<Diagnostic> = self
-                .objects
-                .keys()
-                .filter(|&&h| {
+            let missing: Vec<Diagnostic> = changes
+                .handles(self)
+                .filter(|&h| {
                     matches!(
                         changes.get(self, h),
                         Some(Object::Entity { entity: Entity::Acis(a), .. })
@@ -1323,7 +1354,7 @@ impl Drawing {
                         && !self.read.acis_without_record.contains(&h)
                         && !linked.contains(&h)
                 })
-                .map(|&h| {
+                .map(|h| {
                     error(
                         Some(h),
                         "the ACIS entity's data is in the data storage section, which has no \
@@ -1352,7 +1383,9 @@ impl Drawing {
     /// (consistent counts are kept, and the mesh written as read). Counts
     /// too large for their field are left for validation to report.
     fn refresh_meshes(&self, changes: &mut Changes) {
-        for (&h, obj) in &self.objects {
+        let base = changes.objects(self);
+        let mut stale = Vec::new();
+        for (h, obj) in base.each() {
             let Object::Entity {
                 entity: Entity::PolyfaceMesh(p),
                 ..
@@ -1365,8 +1398,8 @@ impl Drawing {
             };
             let count = |pick: fn(&Entity) -> bool| {
                 list.iter()
-                    .filter(|v| {
-                        matches!(self.objects.get(v), Some(Object::Entity { entity, .. }) if pick(entity))
+                    .filter(|&&v| {
+                        matches!(base.object(v), Some(Object::Entity { entity, .. }) if pick(entity))
                     })
                     .count()
             };
@@ -1376,14 +1409,17 @@ impl Drawing {
                 continue;
             };
             if (p.vertex_count, p.face_count) != (vertices, faces) {
-                if let Some(Object::Entity {
-                    entity: Entity::PolyfaceMesh(p),
-                    ..
-                }) = changes.edit(self, h)
-                {
-                    p.vertex_count = vertices;
-                    p.face_count = faces;
-                }
+                stale.push((h, vertices, faces));
+            }
+        }
+        for (h, vertices, faces) in stale {
+            if let Some(Object::Entity {
+                entity: Entity::PolyfaceMesh(p),
+                ..
+            }) = changes.edit(self, h)
+            {
+                p.vertex_count = vertices;
+                p.face_count = faces;
             }
         }
     }
@@ -1393,16 +1429,18 @@ impl Drawing {
     /// and none has the bits of the other kinds (see [`vertex_flags`]).
     /// Flags already so are kept, and the vertex written as read.
     fn refresh_vertex_flags(&self, changes: &mut Changes) {
-        for (&h, obj) in &self.objects {
-            let Object::Entity { entity, .. } = obj else {
-                continue;
-            };
-            let Some((flags, fixed)) = vertex_flags(entity) else {
-                continue;
-            };
-            if flags == fixed {
-                continue;
-            }
+        let stale: Vec<(Handle, u8)> = changes
+            .objects(self)
+            .each()
+            .filter_map(|(h, obj)| match obj {
+                Object::Entity { entity, .. } => match vertex_flags(entity)? {
+                    (flags, fixed) if flags != fixed => Some((h, fixed)),
+                    _ => None,
+                },
+                Object::Other { .. } => None,
+            })
+            .collect();
+        for (h, fixed) in stale {
             if let Some(Object::Entity {
                 entity: Entity::Vertex3d(v) | Entity::VertexMesh(v) | Entity::VertexPface(v),
                 ..
@@ -1421,13 +1459,15 @@ impl Drawing {
     /// layouts keep their list, but entries naming no object are dropped,
     /// with a warning. Returns the block entity list entries walked.
     fn refresh_layout_viewports(&self, changes: &mut Changes) -> usize {
-        let (lists, steps) = own_layout_viewports(&self.objects);
+        let base = changes.objects(self);
+        let (lists, steps) = own_layout_viewports(&base);
         let named_back: HashSet<Handle> = lists.iter().map(|(h, _)| *h).collect();
+        let mut stale = Vec::new();
         for (h, now) in lists {
             let Some(Object::Other {
                 object: NonGraphical::Layout(l),
                 ..
-            }) = self.objects.get(&h)
+            }) = base.object(h)
             else {
                 continue;
             };
@@ -1455,7 +1495,7 @@ impl Drawing {
                     .copied()
                     .filter(|v| {
                         in_block.contains(v)
-                            || matches!(self.objects.get(v), Some(Object::Entity { .. }))
+                            || matches!(base.object(*v), Some(Object::Entity { .. }))
                                 && self.owner_of(*v) != Some(l.block_record)
                     })
                     .collect();
@@ -1464,18 +1504,22 @@ impl Drawing {
                 list
             };
             if list != l.viewports {
-                if let Some(Object::Other {
-                    object: NonGraphical::Layout(l),
-                    ..
-                }) = changes.edit(self, h)
-                {
-                    l.viewports = list;
-                }
+                stale.push((h, list));
             }
         }
-        for (h, missing) in self.dangling_layout_viewports(&named_back, |v| {
-            changes.dropped.contains(&v) || !self.objects.contains_key(&v)
-        }) {
+        let dangling = Self::dangling_layout_viewports(&base, &named_back, |v| {
+            changes.dropped.contains(&v) || base.object(v).is_none()
+        });
+        for (h, list) in stale {
+            if let Some(Object::Other {
+                object: NonGraphical::Layout(l),
+                ..
+            }) = changes.edit(self, h)
+            {
+                l.viewports = list;
+            }
+        }
+        for (h, missing) in dangling {
             changes
                 .warnings
                 .push(dangling_viewports_warning(h, &missing));
@@ -1495,12 +1539,12 @@ impl Drawing {
     /// whose viewport list has entries `gone` says are not written, with
     /// those entries.
     fn dangling_layout_viewports(
-        &self,
+        objects: &impl ObjectSet,
         named_back: &HashSet<Handle>,
         gone: impl Fn(Handle) -> bool,
     ) -> Vec<(Handle, Vec<Handle>)> {
         let mut out = Vec::new();
-        for (&h, obj) in &self.objects {
+        for (h, obj) in objects.each() {
             let Object::Other {
                 object: NonGraphical::Layout(l),
                 ..
@@ -1524,8 +1568,10 @@ impl Drawing {
     /// list and the new ones follow in handle order; entries AutoCAD keeps
     /// for erased objects stay.
     fn refresh_block_inserts(&self, changes: &mut Changes) {
-        let users = block_references(&self.objects);
-        for (&h, obj) in &self.objects {
+        let base = changes.objects(self);
+        let users = block_references(&base);
+        let mut stale = Vec::new();
+        for (h, obj) in base.each() {
             let Object::Other {
                 object: NonGraphical::BlockRecord(b),
                 ..
@@ -1553,13 +1599,16 @@ impl Drawing {
             let listed: HashSet<Handle> = list.iter().copied().collect();
             list.extend(now.iter().filter(|u| !listed.contains(u)));
             if list != b.inserts {
-                if let Some(Object::Other {
-                    object: NonGraphical::BlockRecord(b),
-                    ..
-                }) = changes.edit(self, h)
-                {
-                    b.inserts = list;
-                }
+                stale.push((h, list));
+            }
+        }
+        for (h, list) in stale {
+            if let Some(Object::Other {
+                object: NonGraphical::BlockRecord(b),
+                ..
+            }) = changes.edit(self, h)
+            {
+                b.inserts = list;
             }
         }
     }
@@ -1713,13 +1762,13 @@ fn vertex_flags(entity: &Entity) -> Option<(u8, u8)> {
 }
 
 /// Whether the entity list `list` holds an ATTDEF.
-fn holds_attdef(objects: &BTreeMap<Handle, Object>, list: &EntityList) -> bool {
+fn holds_attdef(objects: &impl ObjectSet, list: &EntityList) -> bool {
     let EntityList::Owned(list) = list else {
         return false;
     };
-    list.iter().any(|e| {
+    list.iter().any(|&e| {
         matches!(
-            objects.get(e),
+            objects.object(e),
             Some(Object::Entity {
                 entity: Entity::AttDef(_),
                 ..
@@ -2500,7 +2549,7 @@ mod tests {
         d.objects.insert(Handle(0x999), viewport(0x999, 0x12).1);
         let changes = d.refreshed(&mut WriteWork::default());
         assert!(changes.warnings.is_empty());
-        assert!(!changes.replaced.contains_key(&Handle(0x20)));
+        assert!(!changes.overlay.contains_key(&Handle(0x20)));
     }
 
     /// A layout moved to another block (which names it back) since read
@@ -2518,7 +2567,7 @@ mod tests {
         ]);
         d.read.capture(&[], &d.objects.clone(), &[], Version::R2018);
         let changes = d.refreshed(&mut WriteWork::default());
-        assert!(changes.replaced.is_empty());
+        assert!(changes.overlay.is_empty());
         for (h, l) in [(0x10, Handle(0)), (0x11, Handle(0x20))] {
             if let Some(Object::Other {
                 object: NonGraphical::BlockRecord(b),
@@ -2659,7 +2708,7 @@ mod tests {
         let d = table();
         assert!(d.unconvertible_objects().is_empty());
         assert_eq!(
-            d.drops().dropped,
+            d.drops(&d.objects).dropped,
             BTreeSet::from([Handle(0x20), Handle(0x21)])
         );
         let back = Drawing::from_bytes(&write_unvalidated(&d, &mut WriteWork::default())).unwrap();
