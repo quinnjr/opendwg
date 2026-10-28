@@ -1003,16 +1003,17 @@ mod tests {
             crate::bits::BitReader::new(&bytes)
                 .read_enc_with_aci(Version::R2018)
                 .unwrap(),
-            (c, None, false, 0xE6)
+            (c.clone(), None, false, 0xE6)
         );
-        // The ACI is ignored for other colors and must fit 9 bits.
+        // The ACI must fit 9 bits beside a true color, and is ignored (not
+        // checked) for other colors.
         let mut w = BitWriter::new();
-        w.write_enc_with_aci(&Color::ByLayer, None, false, 0xE6, Version::R2018)
+        w.write_enc_with_aci(&Color::ByLayer, None, false, 0x200, Version::R2018)
             .unwrap();
         assert_eq!(w.bit_len(), 2);
         assert!(
             BitWriter::new()
-                .write_enc_with_aci(&Color::ByLayer, None, false, 0x200, Version::R2018)
+                .write_enc_with_aci(&c, None, false, 0x200, Version::R2018)
                 .is_err()
         );
     }
