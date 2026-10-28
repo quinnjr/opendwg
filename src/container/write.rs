@@ -356,11 +356,14 @@ fn system_page(kind: u32, data: &[u8]) -> Result<Vec<u8>> {
 /// [`RawSections::preview_offset`] is set and differs (the preview holds absolute addresses,
 /// see [`r2018_preview_address`]), this is an error. Sections that cannot be written (a name
 /// reserved for a known section or too long, a password-encrypted section, sizes beyond the
-/// format's 32-bit page fields) are errors too.
+/// format's 32-bit page fields) are errors too. Sections of another version are
+/// [`Error::Encode`].
 pub fn write_r2018(raw: &RawSections) -> Result<Vec<u8>> {
     if raw.version != Version::R2018 {
-        return Err(Error::UnsupportedVersion(format!(
-            "{} (the R2018 writer takes R2018 sections)",
+        // Sections of another version are a value the writer cannot encode,
+        // not a file of a version the library cannot read.
+        return Err(Error::Encode(format!(
+            "sections of {} (the R2018 writer takes R2018 sections)",
             String::from_utf8_lossy(raw.version.magic())
         )));
     }
@@ -1095,7 +1098,7 @@ mod tests {
         raw.version = Version::R2013;
         assert!(matches!(
             write_r2018(&raw),
-            Err(Error::UnsupportedVersion(_))
+            Err(Error::Encode(m)) if m.contains("AC1027")
         ));
 
         let mut raw = sample();
