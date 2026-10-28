@@ -216,7 +216,6 @@ fn raw_objects_reencode() {
             }
             // ACIS entities read before R2013 are written by the drawing
             // writer (R2000 SAT not at all): alone, they do not encode.
-            // Not a let chain: the crate's rust-version (1.85) has none.
             let inline_acis = match obj {
                 Object::Entity {
                     entity: Entity::Acis(a),

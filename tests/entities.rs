@@ -296,7 +296,6 @@ fn corpus_entity_common_forms() {
         // version. BLOCK 5A's owner 58 is "handle - 2" (code 0xC).
         let (mut relative, mut absolute) = (0, 0);
         for (_, o) in d.objects() {
-            // Not a let chain: the crate's rust-version (1.85) has none.
             if let Object::Entity { common, .. } = o {
                 if common.entmode != 0 {
                     continue;

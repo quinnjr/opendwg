@@ -262,6 +262,11 @@ OPENDWG_REQUIRE_CORPUS=1 cargo test --release -- --include-ignored
 The ignored tests are the slow ones, such as the 200,000-entity round trip
 (`large_drawing_roundtrip_is_linear`), meant for release builds.
 
+`scripts/check-msrv.sh` builds the library, tests and examples, with and
+without `serde`, on the crate's `rust-version` (1.85) with warnings as
+errors: newer syntax such as let chains does not build there. It needs that
+toolchain (`rustup toolchain install 1.85`).
+
 ### Fuzzing
 
 `tests/mutation_fuzz.rs` runs in every `cargo test`: it mutates each corpus

@@ -26,13 +26,13 @@
 
 use crate::error::{Error, Result};
 
+/// Largest distance the decoder accepts (`0x4000 + 0x3FFF + 0x4000`).
+const DECODE_WINDOW: usize = 0xBFFF;
 /// Largest distance `compress` emits. Distances above this need the opcode 0x18-0x1F forms
 /// (bit 0x08), which ODS does not document, so the matcher never uses them. `encode` can still
 /// write them (tests) and `decompress` reads them.
 const WINDOW: usize = 0x7FFF;
-// Within the largest distance the decoder accepts, `0x4000 + 0x3FFF + 0x4000`.
-// (A constant for it, used only here, is "never used" to Rust 1.85.)
-const _: () = assert!(WINDOW <= 0xBFFF);
+const _: () = assert!(WINDOW <= DECODE_WINDOW);
 /// Chain candidates examined per position.
 const MAX_CHAIN: usize = 48;
 const HASH_BITS: u32 = 15;
@@ -195,6 +195,7 @@ pub(crate) fn decompress_into(src: &[u8], expected_len: usize, out: &mut Vec<u8>
             }
         };
 
+        debug_assert!(dist <= DECODE_WINDOW, "the opcodes reach no further");
         if dist > out.len() - base {
             return Err(corrupt("back-reference before start of output"));
         }
