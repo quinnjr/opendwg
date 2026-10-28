@@ -943,9 +943,7 @@ fn is_modeled(key: TypeKey, entity: bool) -> bool {
         TypeKey::Fixed(code) => FIXED
             .get_or_init(|| {
                 (0..FIRST_CLASS_NUMBER)
-                    .map(|c| {
-                        [false, true].map(|entity| probe_modeled(TypeKey::Fixed(c), entity))
-                    })
+                    .map(|c| [false, true].map(|entity| probe_modeled(TypeKey::Fixed(c), entity)))
                     .collect()
             })
             .get(usize::from(code))
@@ -1687,11 +1685,9 @@ mod tests {
             .map(|n| n.to_string())
             .collect();
         names.extend((0..FIRST_CLASS_NUMBER).filter_map(|c| Some(fixed_type(c)?.0.to_owned())));
-        names.extend(
-            (0..200u16).filter_map(|i| {
-                Some(crate::section::classes::known_class_name(usize::from(i))?.to_owned())
-            }),
-        );
+        names.extend((0..200u16).filter_map(|i| {
+            Some(crate::section::classes::known_class_name(usize::from(i))?.to_owned())
+        }));
         names.extend(
             ["ACAD_TABLE", "CELLSTYLEMAP", "AECC_STYLE", "", "dictionary"].map(String::from),
         );
@@ -2011,7 +2007,10 @@ mod tests {
         let pos = r.data.bit_pos();
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
-        assert_eq!(try_typed(&mut r, key, || "XRECORD".into(), failing, &mut diags), None);
+        assert_eq!(
+            try_typed(&mut r, key, || "XRECORD".into(), failing, &mut diags),
+            None
+        );
         assert_eq!(
             diags,
             [Diagnostic {
@@ -2057,7 +2056,10 @@ mod tests {
         let pos = r.data.bit_pos();
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
-        assert_eq!(try_typed(&mut r, key, || "XRECORD".into(), partial, &mut diags), None);
+        assert_eq!(
+            try_typed(&mut r, key, || "XRECORD".into(), partial, &mut diags),
+            None
+        );
         assert_eq!(r.data.bit_pos(), pos);
         assert_eq!(diags.len(), 1);
         // Left: the B; the string (a 10-bit BS length and 6 UTF-16 units);

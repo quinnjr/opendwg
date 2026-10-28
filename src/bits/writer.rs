@@ -704,7 +704,9 @@ mod tests {
                 .write_enc_with_aci(&color, None, false, 0xFFFF, Version::R2018)
                 .unwrap();
             let mut plain = BitWriter::new();
-            plain.write_enc(&color, None, false, Version::R2018).unwrap();
+            plain
+                .write_enc(&color, None, false, Version::R2018)
+                .unwrap();
             assert_eq!(ignored.into_bytes(), plain.into_bytes(), "{color:?}");
         }
     }

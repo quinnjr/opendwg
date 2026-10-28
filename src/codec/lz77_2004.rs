@@ -716,7 +716,11 @@ mod tests {
         let mut src = pat.clone();
         src.extend(noise(0xBFFF - 32, 4242));
         src.extend(&pat);
-        assert!(find_matches(&src, &mut Chains::default()).iter().all(|m| m.dist <= 0x7FFF));
+        assert!(
+            find_matches(&src, &mut Chains::default())
+                .iter()
+                .all(|m| m.dist <= 0x7FFF)
+        );
         rt(&src);
     }
 
