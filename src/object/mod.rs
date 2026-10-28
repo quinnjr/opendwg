@@ -25,7 +25,10 @@
 //!   as AutoCAD 2025 writes some dimension fields): written in the
 //!   shortest form;
 //! - the end padding of a typed object's handle stream (fewer than 8 bits):
-//!   written as one bits, as AutoCAD pads. Raw objects keep theirs.
+//!   written as one bits, as AutoCAD pads. Raw objects keep theirs;
+//! - the reference codes of the object's own handle and of an extended data
+//!   application's handle (only their values are kept): written as 0 and 5
+//!   (a hard pointer), as AutoCAD writes them.
 //!
 //! The corpus tests allow such objects (at most one in fifty of a type per
 //! file) and check that they decode equal.
@@ -519,8 +522,12 @@ impl NonGraphical {
     }
 
     /// Whether the object can be written as R2018. Raw bits from R2000 and
-    /// R2004 cannot, nor raw bits of a modeled type from before R2018 (see
-    /// [`raw_is_convertible`]); neither can an object whose common data
+    /// R2004 cannot, nor raw bits of a modeled type read from a version
+    /// before the one whose layout of the type is R2018's (see
+    /// [`raw_is_convertible`] and [`layout_stable_since`]: MATERIAL from
+    /// R2007, VISUALSTYLE from R2013, other types R2018), but a VISUALSTYLE
+    /// AutoCAD marked as saved in its earlier layout, which is copied (see
+    /// [`Object::is_convertible`]); neither can an object whose common data
     /// could not be read ([`NonGraphical::Unreadable`]), an R2000 block
     /// record whose entity list has not been built (see [`EntityList`]), a
     /// table entry whose xref index R2018 cannot store (see [`TableEntry`]),

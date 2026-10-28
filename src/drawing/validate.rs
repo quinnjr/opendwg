@@ -32,12 +32,15 @@
 //!   when the owner is a dictionary (its entries are soft owner references,
 //!   and AutoCAD's own files have objects their owner dictionary does not
 //!   list) or either is a raw object (a class the library does not model,
-//!   whose ownership semantics are unknown: Civil 3D's AECC styles);
+//!   whose ownership semantics are unknown: Civil 3D's AECC styles) and the
+//!   object is not an entity;
 //! - an object listed as owned (a hard owner reference, an entity list, a
 //!   table control's entry, a hard-owner dictionary's entry, an extension
 //!   dictionary) whose owner is another object, but when either is a raw
-//!   object (a null owner of a modelled object the writer sets instead, see
-//!   `drawing::write`);
+//!   object and the listed object is not an entity (an entity's owner and
+//!   the block list it is in are always checked); a null owner of a
+//!   modelled object exactly one object lists the writer sets instead, see
+//!   `drawing::write`;
 //! - a missing required table, record or dictionary: the nine table controls,
 //!   layer `0`, linetypes `ByLayer`, `ByBlock` and `Continuous`, text style
 //!   and dimension style `Standard`, application `ACAD`, block records

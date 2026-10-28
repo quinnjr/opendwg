@@ -28,9 +28,11 @@ pub struct RawObject {
     pub strings: Option<(Vec<u8>, u64)>,
     /// Type-specific handle references, in stream order.
     pub handles: Vec<HandleRef>,
-    /// Handle stream bits after the last whole reference: the end padding
-    /// (AutoCAD pads with one bits, and counts them in the handle stream
-    /// size), MSB-first and zero-padded to a byte.
+    /// Handle stream bits after the last whole reference, MSB-first and
+    /// zero-padded to a byte: the end padding (AutoCAD pads with one bits,
+    /// and counts them in the handle stream size), or, when a reference
+    /// does not parse (its counter runs past the stream's end), that
+    /// reference's bits and everything after them (see [`HandleTail`]).
     pub tail_handles_raw: Vec<u8>,
     /// How many bits of `tail_handles_raw` are real.
     pub tail_handle_bits: u64,
@@ -158,7 +160,6 @@ pub struct UnreadableObject {
     pub error: String,
 }
 
-/// The remaining bits of `r`, MSB-first and zero-padded, and their count.
 /// Handle stream bits after the last reference that are not end padding: a
 /// reference that does not parse (its counter runs past the stream's end).
 /// A decoder that reads references to the end of the stream keeps them as
@@ -201,6 +202,7 @@ pub(crate) fn trailing_refs(r: &mut ObjReader) -> Result<(Vec<HandleRef>, Handle
     Ok((out, HandleTail::default()))
 }
 
+/// The remaining bits of `r`, MSB-first and zero-padded, and their count.
 pub(crate) fn take_rest(r: &mut BitReader) -> Result<(Vec<u8>, u64)> {
     let bits = r.remaining_bits();
     Ok((take_bits(r, bits)?, bits))

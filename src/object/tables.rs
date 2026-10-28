@@ -316,10 +316,12 @@ pub enum EntityList {
         last: Handle,
     },
     /// R2004+: every entity, in order. They are written as hard owners
-    /// (code 3) for a block record, an INSERT and every POLYLINE, and as
-    /// soft pointers (code 4) for an MINSERT, as ODS gives them (ODS gives
-    /// soft pointers for polyface and polygon mesh vertices too; the corpus
-    /// has hard owners, see `entities::poly`).
+    /// (code 3) for a block record, an INSERT and every POLYLINE (ODS gives
+    /// soft pointers for polyface and polygon mesh vertices; the corpus has
+    /// hard owners, see `entities::poly`). An MINSERT's attributes are
+    /// written with the absolute code they were read with
+    /// ([`crate::object::MInsert::read_attrib_code`]), else as soft pointers
+    /// (code 4), as ODS gives them.
     Owned(Vec<Handle>),
 }
 
