@@ -153,13 +153,14 @@ pub(super) fn read(bytes: &[u8]) -> Result<RawSections> {
 
     sections.insert(SectionName::Handles, required(2, "object map")?.to_vec());
 
-    // Optional sections (Template, AuxHeader, Preview): absent ones (size or seeker 0) are
-    // skipped; present ones that are out of range (or a preview without its sentinels) are
+    // Optional sections (Template, AuxHeader, Preview): absent ones (size or seeker 0: offset 0
+    // is the file header itself) are skipped; present ones that are out of range (or a preview without its sentinels) are
     // skipped with a warning.
     // Locator record 4 is stored as `Template`: ODS 3.2.6 says it holds only the MEASUREMENT
     // variable, which ODS places in the AcDb:Template section (chapter 22).
     let mut warnings = Vec::new();
-    if let Some((seeker, size)) = locators[4].filter(|&(_, s)| s > 0) {
+    let present = |&(seeker, size): &(u32, u32)| seeker != 0 && size > 0;
+    if let Some((seeker, size)) = locators[4].filter(present) {
         match span(bytes, seeker, size) {
             Some(t) => {
                 sections.insert(SectionName::Template, t.to_vec());
@@ -169,7 +170,7 @@ pub(super) fn read(bytes: &[u8]) -> Result<RawSections> {
             )),
         }
     }
-    if let Some((seeker, size)) = locators[5].filter(|&(_, s)| s > 0) {
+    if let Some((seeker, size)) = locators[5].filter(present) {
         match span(bytes, seeker, size) {
             // ODS calls record 5 unknown; it is the AuxHeader only with its signature.
             Some(a) if a.starts_with(&[0xFF, 0x77, 0x01]) => {
@@ -335,6 +336,22 @@ mod tests {
         assert!(!raw.sections.contains_key(&SectionName::AuxHeader));
         // Template, record 5 and the preview each add a warning.
         assert_eq!(raw.warnings.len(), 3, "{:?}", raw.warnings);
+    }
+
+    /// An optional locator at offset 0 with a size is absent: the file's own
+    /// header bytes are not read as the Template section (whose MEASUREMENT
+    /// they would set) nor as record 5.
+    #[test]
+    fn optional_locators_at_offset_zero_are_absent() {
+        let (_, body) = valid(HEADER_START);
+        let base = OFF_LOCATORS + 5 * LOCATOR_LEN + 2 + 16;
+        let mut l = locs(base);
+        l.push((4, 0, 6));
+        l.push((5, 0, 6));
+        let raw = read(&build(&l, None, 0, &body)).unwrap();
+        assert!(!raw.sections.contains_key(&SectionName::Template));
+        assert!(!raw.sections.contains_key(&SectionName::AuxHeader));
+        assert!(raw.warnings.is_empty(), "{:?}", raw.warnings);
     }
 
     #[test]
