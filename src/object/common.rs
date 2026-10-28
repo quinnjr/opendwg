@@ -736,25 +736,21 @@ fn read_xdata_string(r: &mut ObjReader, b: &mut Bytes) -> Result<String> {
         text
     } else {
         let n = usize::from(b.u16()?);
-        let codepage = u16::from(b.u8()?);
-        // The ODA SDK (`cc-15`, `cc-21`) and the writer of civilcraft's
-        // R2000 fixtures (`cc-02`, `cc-04`, ...) store code page 0 where
-        // AutoCAD stores the drawing's (30 in every AutoCAD R2000/R2004
-        // corpus file): 382 strings, all ASCII ("AcDbSavedByObjectVersion",
-        // "... Data", "DSTYLE"), whose lengths and following items read
-        // right. Off-spec but harmless for ASCII: read as Windows-1252, with
-        // the warning.
-        if !strings::is_supported(codepage) {
-            r.diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                handle: Some(r.handle),
-                message: format!(
-                    "extended data string code page {codepage} is not supported; read as \
-                     Windows-1252"
-                ),
-            });
+        let stored = u16::from(b.u8()?);
+        let bytes = b.take(n)?;
+        let (codepage, doubt) = text_item_codepage(stored, r.codepage, bytes);
+        if let Some(doubt) = doubt {
+            let message = format!("extended data string {doubt}");
+            // Once per object, not per string.
+            if !r.diagnostics.iter().any(|d| d.message == message) {
+                r.diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    handle: Some(r.handle),
+                    message,
+                });
+            }
         }
-        let (text, malformed) = strings::decode_checked(codepage, b.take(n)?);
+        let (text, malformed) = strings::decode_checked(codepage, bytes);
         if malformed {
             r.diagnostics
                 .push(lossy_diag(r.handle, "malformed code page bytes"));
@@ -763,6 +759,38 @@ fn read_xdata_string(r: &mut ObjReader, b: &mut Bytes) -> Result<String> {
     };
     text.truncate(text.trim_end_matches('\0').len());
     Ok(text)
+}
+
+/// The code page a pre-R2007 text item (an extended data string, an
+/// XRECORD text) stored with code page byte `stored` is read in, in a
+/// drawing of code page `drawing`, and what is doubtful about it, if
+/// anything (for a warning: "... code page N is not supported; ...").
+///
+/// Code page 0 is no code page index (`$DWGCODEPAGE` numbers them from 1).
+/// AutoCAD stores the drawing's code page; the ODA SDK (`cc-15`, `cc-21`)
+/// and the writer of civilcraft's R2000 fixtures (`cc-02`, `cc-04`, ...)
+/// store 0 instead: in the corpus, 27,349 XRECORD texts and 382 extended
+/// data strings in 9 files whose drawings are code page 30, every one
+/// ASCII, while every other item names its drawing's code page (29, 30
+/// or 39). Text stored with 0 is read in the drawing's code page; ASCII
+/// text reads the same in every code page the files use, so it is not
+/// doubtful, but text with other bytes is (no file shows what such a
+/// writer means by 0).
+pub(crate) fn text_item_codepage(stored: u16, drawing: u16, bytes: &[u8]) -> (u16, Option<String>) {
+    let codepage = if stored == 0 { drawing } else { stored };
+    let doubt = if !strings::is_supported(codepage) {
+        Some(format!(
+            "code page {codepage} is not supported; read as Windows-1252"
+        ))
+    } else if stored == 0 && !bytes.is_ascii() {
+        Some(format!(
+            "with code page 0 has non-ASCII bytes; read in the drawing's code page \
+             {codepage}"
+        ))
+    } else {
+        None
+    };
+    (codepage, doubt)
 }
 
 fn lossy_diag(handle: Handle, what: &str) -> Diagnostic {
@@ -1253,23 +1281,29 @@ mod tests {
         assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
     }
 
-    #[test]
-    fn r2004_xdata_string_unknown_codepage_warns() {
+    /// Extended data strings of one object, each `(code page, bytes)`, read
+    /// in a drawing of code page `drawing`: the strings and the warnings.
+    fn xdata_strings(items: &[(u8, &[u8])], drawing: u16) -> (Vec<String>, Vec<String>) {
         let mut d = BitWriter::new();
         d.write_handle_ref(HandleRef {
             code: 0,
             value: 0x50,
         })
         .unwrap();
-        // Code page 11 (DOS 437) is not supported: read as 1252, with a warning.
-        let item = [0u8, 1, 0, 11, b'A'];
-        d.write_bs(item.len() as i16);
+        let mut data = Vec::new();
+        for &(cp, bytes) in items {
+            data.push(0);
+            data.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+            data.push(cp);
+            data.extend_from_slice(bytes);
+        }
+        d.write_bs(data.len() as i16);
         d.write_handle_ref(HandleRef {
             code: 5,
             value: 0x12,
         })
         .unwrap();
-        d.write_bytes(&item);
+        d.write_bytes(&data);
         d.write_bs(0);
         d.write_bl(0); // reactors
         d.write_b(true); // no xdict
@@ -1277,12 +1311,45 @@ mod tests {
         hs.write_handle_ref(HandleRef { code: 4, value: 1 })
             .unwrap();
         let bytes = assemble(Version::R2004, 0x33, &d, None, &hs);
-        let (mut r, _) = ObjReader::split(&bytes, Version::R2004, 30).unwrap();
+        let (mut r, _) = ObjReader::split(&bytes, Version::R2004, drawing).unwrap();
         let c = decode_object_common(&mut r).unwrap();
-        assert_eq!(c.xdata[0].items, [XDataItem::String("A".into())]);
-        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
-        assert_eq!(r.diagnostics[0].handle, Some(Handle(0x50)));
-        assert!(r.diagnostics[0].message.contains("code page 11"));
+        assert!(r.diagnostics.iter().all(|x| x.handle == Some(Handle(0x50))));
+        let strings = c.xdata[0]
+            .items
+            .iter()
+            .map(|i| match i {
+                XDataItem::String(s) => s.clone(),
+                i => panic!("{i:?}"),
+            })
+            .collect();
+        (
+            strings,
+            r.diagnostics.into_iter().map(|x| x.message).collect(),
+        )
+    }
+
+    /// Code page 11 (DOS 437) is not supported: read as 1252, with one
+    /// warning per object however many strings have it.
+    #[test]
+    fn r2004_xdata_string_unknown_codepage_warns() {
+        let (strings, warnings) = xdata_strings(&[(11, b"A"), (11, b"B")], 30);
+        assert_eq!(strings, ["A", "B"]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("code page 11 is not supported"));
+    }
+
+    /// Code page 0 (the ODA SDK's, see `text_item_codepage`) is the
+    /// drawing's: ASCII strings read without a warning; others read in the
+    /// drawing's code page, with one warning per object.
+    #[test]
+    fn r2004_xdata_string_code_page_0_is_the_drawings() {
+        let (strings, warnings) = xdata_strings(&[(0, b"DSTYLE"), (0, b"Data")], 30);
+        assert_eq!(strings, ["DSTYLE", "Data"]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let (strings, warnings) = xdata_strings(&[(0, &[0x82, 0xA0]), (0, &[0x82, 0xA0])], 38);
+        assert_eq!(strings, ["あ", "あ"]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("code page 0") && warnings[0].contains("38"));
     }
 
     // ---- hostile input ----

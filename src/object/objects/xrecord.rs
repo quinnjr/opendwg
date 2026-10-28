@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::error::encode_error as encode_err;
 use crate::handle::{Handle, HandleRef};
-use crate::object::common::AsRead;
+use crate::object::common::{AsRead, text_item_codepage};
 use crate::object::entities::dim::{check_fits, count, write_count};
 use crate::object::raw::{HandleTail, trailing_refs};
 use crate::object::stream::{ObjReader, ObjWriter};
@@ -177,9 +177,12 @@ struct ItemReader<'a> {
     bytes: &'a [u8],
     pos: usize,
     version: Version,
-    /// The first code page of a pre-R2007 text that is not supported (read
-    /// as Windows-1252).
-    unsupported: Option<u16>,
+    /// The drawing's code page, which pre-R2007 text stored with code page 0
+    /// is read in (see [`text_item_codepage`]).
+    codepage: u16,
+    /// What is doubtful about the first pre-R2007 text whose code page is
+    /// (see [`text_item_codepage`]).
+    doubt: Option<String>,
 }
 
 impl ItemReader<'_> {
@@ -210,11 +213,13 @@ impl ItemReader<'_> {
                 text => Ok(text),
             })
         } else {
-            let codepage = u16::from(self.array::<1>()?[0]);
-            let supported = strings::is_supported(codepage);
-            let text = strings::decode_checked(codepage, self.take(n)?);
-            if !supported {
-                self.unsupported.get_or_insert(codepage);
+            let stored = u16::from(self.array::<1>()?[0]);
+            let drawing = self.codepage;
+            let bytes = self.take(n)?;
+            let (codepage, doubt) = text_item_codepage(stored, drawing, bytes);
+            let text = strings::decode_checked(codepage, bytes);
+            if self.doubt.is_none() {
+                self.doubt = doubt;
             }
             Some(Ok(text))
         }
@@ -256,15 +261,20 @@ impl ItemReader<'_> {
 /// Parse extended record data bytes into items. An item that cannot be read
 /// as its type, or of a code with no type, ends the list as
 /// [`XRecordValue::Unknown`] with the rest of the bytes from the item's
-/// start. Returns the items, whether a text decoded lossily, and the first
-/// unsupported code page a pre-R2007 text named (it was read as
-/// Windows-1252).
-fn parse_items(bytes: &[u8], version: Version) -> (Vec<(i16, XRecordValue)>, bool, Option<u16>) {
+/// start. Returns the items, whether a text decoded lossily, and what is
+/// doubtful about the first pre-R2007 text whose code page is (see
+/// [`text_item_codepage`]). `codepage` is the drawing's.
+fn parse_items(
+    bytes: &[u8],
+    version: Version,
+    codepage: u16,
+) -> (Vec<(i16, XRecordValue)>, bool, Option<String>) {
     let mut r = ItemReader {
         bytes,
         pos: 0,
         version,
-        unsupported: None,
+        codepage,
+        doubt: None,
     };
     let mut items = Vec::new();
     let mut lossy = false;
@@ -273,7 +283,7 @@ fn parse_items(bytes: &[u8], version: Version) -> (Vec<(i16, XRecordValue)>, boo
         let Some(code) = r.array().map(i16::from_le_bytes) else {
             // A single trailing byte: no room for a group code.
             items.push((0, XRecordValue::Unknown(bytes[start..].to_vec())));
-            return (items, lossy, r.unsupported);
+            return (items, lossy, r.doubt);
         };
         match group_code_type(code).and_then(|t| r.value(t)) {
             Some((v, l)) => {
@@ -283,11 +293,11 @@ fn parse_items(bytes: &[u8], version: Version) -> (Vec<(i16, XRecordValue)>, boo
             None => {
                 let rest = bytes.get(start..).unwrap_or_default().to_vec();
                 items.push((code, XRecordValue::Unknown(rest)));
-                return (items, lossy, r.unsupported);
+                return (items, lossy, r.doubt);
             }
         }
     }
-    (items, lossy, r.unsupported)
+    (items, lossy, r.doubt)
 }
 
 /// Write extended record items as R2018 data bytes.
@@ -378,7 +388,7 @@ impl XRecord {
         let n = count(r.data.read_bl()?, "extended record byte")?;
         check_fits(r, n, 8, "extended record data")?;
         let bytes = r.data.read_bytes(n)?;
-        let (items, lossy, unsupported) = parse_items(&bytes, r.version);
+        let (items, lossy, doubt) = parse_items(&bytes, r.version, r.codepage);
         if lossy {
             r.diagnostics.push(crate::diag::Diagnostic {
                 severity: crate::diag::Severity::Warning,
@@ -386,15 +396,12 @@ impl XRecord {
                 message: "extended record text is malformed; it became U+FFFD".into(),
             });
         }
-        // As for extended data strings (see `object::common`).
-        if let Some(codepage) = unsupported {
+        // Once per record, as for extended data strings.
+        if let Some(doubt) = doubt {
             r.diagnostics.push(crate::diag::Diagnostic {
                 severity: crate::diag::Severity::Warning,
                 handle: Some(r.handle),
-                message: format!(
-                    "extended record text code page {codepage} is not supported; read as \
-                     Windows-1252"
-                ),
+                message: format!("extended record text {doubt}"),
             });
         }
         let cloning = r.data.read_bs()?;
@@ -656,7 +663,7 @@ pub(crate) mod tests {
             ),
         ];
         for (bytes, want) in cases {
-            let (items, lossy, unsupported) = parse_items(bytes, v);
+            let (items, lossy, unsupported) = parse_items(bytes, v, 30);
             assert!(!lossy && unsupported.is_none());
             assert_eq!(items, want, "{bytes:02X?}");
             assert_eq!(items_bytes(&items).unwrap(), bytes, "{bytes:02X?}");
@@ -725,19 +732,45 @@ pub(crate) mod tests {
         let x = XRecord::decode(&mut r).unwrap();
         assert!(!x.is_convertible());
         assert!(x.encode(&mut ObjWriter::new(H)).is_err());
-        // Text in a code page the library cannot decode is read as
-        // Windows-1252, with a warning (as extended data strings are).
-        let data = [0x01, 0x00, 0x02, 0x00, 0, b'h', b'i'];
-        let mut d = BitWriter::new();
-        d.write_bl(data.len() as i32);
-        d.write_bytes(&data);
-        d.write_bs(1);
-        let bytes = assemble(Version::R2004, 79, &d, None, &BitWriter::new());
-        let (mut r, _) = ObjReader::split(&bytes, Version::R2004, 30).unwrap();
-        let x = XRecord::decode(&mut r).unwrap();
-        assert_eq!(x.items, [(1, XRecordValue::Text("hi".into()))]);
-        assert_eq!(r.diagnostics.len(), 1, "{:?}", r.diagnostics);
-        assert!(r.diagnostics[0].message.contains("code page 0"));
+        // Code page 0 (the ODA SDK's) is the drawing's: ASCII text reads
+        // without a warning; text with other bytes reads in the drawing's
+        // code page with one warning per record, however many items; an
+        // unsupported code page reads as Windows-1252 with one warning.
+        let decode = |items: &[&[u8]], drawing: u16| {
+            let data: Vec<u8> = items.concat();
+            let mut d = BitWriter::new();
+            d.write_bl(data.len() as i32);
+            d.write_bytes(&data);
+            d.write_bs(1);
+            let bytes = assemble(Version::R2004, 79, &d, None, &BitWriter::new());
+            let (mut r, _) = ObjReader::split(&bytes, Version::R2004, drawing).unwrap();
+            let x = XRecord::decode(&mut r).unwrap();
+            let texts: Vec<String> = x
+                .items
+                .iter()
+                .map(|(_, v)| match v {
+                    XRecordValue::Text(t) => t.clone(),
+                    v => panic!("{v:?}"),
+                })
+                .collect();
+            let messages: Vec<String> = r.diagnostics.iter().map(|d| d.message.clone()).collect();
+            (texts, messages)
+        };
+        let hi: &[u8] = &[0x01, 0x00, 0x02, 0x00, 0, b'h', b'i'];
+        assert_eq!(
+            decode(&[hi, hi], 30),
+            (vec!["hi".into(), "hi".into()], vec![])
+        );
+        let a: &[u8] = &[0x01, 0x00, 0x02, 0x00, 0, 0x82, 0xA0]; // "あ" in Shift-JIS
+        let (texts, messages) = decode(&[a, a], 38);
+        assert_eq!(texts, ["あ", "あ"]);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("code page 0") && messages[0].contains("38"));
+        let dos: &[u8] = &[0x01, 0x00, 0x02, 0x00, 11, b'h', b'i'];
+        let (texts, messages) = decode(&[dos, dos], 30);
+        assert_eq!(texts, ["hi", "hi"]);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("code page 11 is not supported"));
         // The data length is checked before allocating.
         let mut d = BitWriter::new();
         d.write_bl(i32::MAX);
