@@ -157,9 +157,11 @@ fn detach(obj: &mut Object, xs: &HashSet<Handle>) {
                     drop(&mut c.extra);
                 }
             }
-            NonGraphical::Dictionary(d) => d.entries.retain(|(_, h)| !gone(h)),
-            NonGraphical::DictionaryWithDefault(d) => {
-                d.dictionary.entries.retain(|(_, h)| !gone(h));
+            NonGraphical::Dictionary(d)
+            | NonGraphical::DictionaryWithDefault(DictionaryWithDefault {
+                dictionary: d, ..
+            }) => {
+                d.entries.retain(|(_, h)| !gone(h));
             }
             NonGraphical::Group(g) => drop(&mut g.entities),
             NonGraphical::SortEntsTable(s) => s.entries.retain(|(_, e)| !gone(e)),
@@ -535,18 +537,10 @@ impl Drawing {
     /// named `name` (compared without case), in list order, from the name
     /// index; none when it is not a dictionary.
     fn dictionary_named(&self, dictionary: Handle, name: &str) -> Vec<Handle> {
-        let entries = match self.objects.get(&dictionary) {
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            }) => &d.entries,
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => &d.dictionary.entries,
-            _ => return Vec::new(),
+        let Some(d) = self.objects.get(&dictionary).and_then(Object::dictionary) else {
+            return Vec::new();
         };
-        self.named(dictionary, name, || entries.clone())
+        self.named(dictionary, name, || d.entries.clone())
     }
 
     /// The handles named `name` in list `list` (a table control, else a
@@ -654,17 +648,7 @@ impl Drawing {
     /// The layout dictionary: the header's, or the named object
     /// dictionary's `ACAD_LAYOUT` entry.
     fn layout_dictionary(&self) -> Option<&[(String, Handle)]> {
-        let entries = |h: Handle| match self.objects.get(&h) {
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            }) => Some(d.entries.as_slice()),
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => Some(d.dictionary.entries.as_slice()),
-            _ => None,
-        };
+        let entries = |h: Handle| Some(self.objects.get(&h)?.dictionary()?.entries.as_slice());
         entries(self.header.dict_layouts).or_else(|| {
             let (_, h) = entries(self.named_objects())?
                 .iter()
@@ -1448,10 +1432,7 @@ impl Drawing {
     ) -> Result<Handle> {
         match self.objects.get(&dictionary) {
             None => return Err(Error::NotFound(dictionary)),
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(_) | NonGraphical::DictionaryWithDefault(_),
-                ..
-            }) => {}
+            Some(o) if o.dictionary().is_some() => {}
             Some(_) => {
                 return Err(invalid(
                     Some(dictionary),
@@ -1512,16 +1493,12 @@ impl Drawing {
         };
         self.objects.insert(h, obj);
         self.classes.extend(classes);
-        match self.objects.get_mut(&dictionary) {
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            }) => d.entries.push((name.to_owned(), h)),
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => d.dictionary.entries.push((name.to_owned(), h)),
-            _ => {}
+        if let Some(d) = self
+            .objects
+            .get_mut(&dictionary)
+            .and_then(Object::dictionary_mut)
+        {
+            d.entries.push((name.to_owned(), h));
         }
         let state = self.ref_index.get_mut();
         state.added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
@@ -2299,15 +2276,10 @@ mod tests {
                         .collect(),
                     true,
                 ),
-                Some(Object::Other {
-                    object: NonGraphical::Dictionary(x),
-                    ..
-                }) => (x.entries.clone(), false),
-                Some(Object::Other {
-                    object: NonGraphical::DictionaryWithDefault(x),
-                    ..
-                }) => (x.dictionary.entries.clone(), false),
-                _ => panic!("{list} is indexed by name but is no list"),
+                o => match o.and_then(Object::dictionary) {
+                    Some(x) => (x.entries.clone(), false),
+                    None => panic!("{list} is indexed by name but is no list"),
+                },
             };
             let mut fresh: HashMap<String, Vec<Handle>> = HashMap::new();
             for (n, h) in &entries {

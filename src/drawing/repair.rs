@@ -188,17 +188,7 @@ impl Drawing {
     /// (nothing added) where `add_object` refuses it.
     fn add_named_dictionary(&self, r: &mut Repair, name: &str) -> Option<Handle> {
         let nod = r.header.dict_named_objects;
-        let entries = match r.get(self, nod)? {
-            Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            } => &d.entries,
-            Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            } => &d.dictionary.entries,
-            _ => return None,
-        };
+        let entries = &r.get(self, nod)?.dictionary()?.entries;
         if entries.iter().any(|(n, _)| names_eq(n, name)) {
             return None;
         }
@@ -304,17 +294,10 @@ impl Drawing {
     /// `name`, compared without case (as AutoCAD looks keys up, and
     /// [`Drawing::add_object`] refuses a second entry of the name).
     fn lacks_named_dictionary(&self, name: &str) -> bool {
-        match self.objects.get(&self.header.dict_named_objects) {
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            }) => !d.entries.iter().any(|(n, _)| names_eq(n, name)),
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => !d.dictionary.entries.iter().any(|(n, _)| names_eq(n, name)),
-            _ => false,
-        }
+        self.objects
+            .get(&self.header.dict_named_objects)
+            .and_then(Object::dictionary)
+            .is_some_and(|d| !d.entries.iter().any(|(n, _)| names_eq(n, name)))
     }
 }
 

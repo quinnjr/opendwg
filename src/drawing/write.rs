@@ -140,7 +140,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::Path;
 
-use super::validate::dictionary_entries;
 use super::{Drawing, own_layout_viewports};
 use crate::container::{
     R2004_PLAIN_HEADER_LEN, RawSections, SectionMeta, SectionName, r2018_preview_address,
@@ -1022,8 +1021,8 @@ impl Drawing {
             if let Some(x) = obj.object_common().xdict {
                 listed.push((x, "its extension dictionary"));
             }
-            if let Some((entries, true)) = dictionary_entries(obj) {
-                listed.extend(entries.iter().map(|&(_, e)| (e, "an entry")));
+            if let Some(d) = obj.dictionary().filter(|d| d.is_hard_owner()) {
+                listed.extend(d.entries.iter().map(|&(_, e)| (e, "an entry")));
             }
             for (child, how) in listed {
                 if child != h && null(child) {

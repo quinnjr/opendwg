@@ -569,6 +569,24 @@ impl NonGraphical {
         })
     }
 
+    /// The dictionary of a dictionary, with or without a default entry.
+    pub fn dictionary(&self) -> Option<&Dictionary> {
+        match self {
+            NonGraphical::Dictionary(d) => Some(d),
+            NonGraphical::DictionaryWithDefault(d) => Some(&d.dictionary),
+            _ => None,
+        }
+    }
+
+    /// [`NonGraphical::dictionary`], to change in place.
+    pub(crate) fn dictionary_mut(&mut self) -> Option<&mut Dictionary> {
+        match self {
+            NonGraphical::Dictionary(d) => Some(d),
+            NonGraphical::DictionaryWithDefault(d) => Some(&mut d.dictionary),
+            _ => None,
+        }
+    }
+
     fn encode(&self, w: &mut ObjWriter) -> Result<()> {
         match self {
             NonGraphical::Unknown(r) => write_raw(w, r),
@@ -818,6 +836,23 @@ impl Object {
         match self {
             Object::Entity { common, .. } => &mut common.obj,
             Object::Other { common, .. } => common,
+        }
+    }
+
+    /// The dictionary of a dictionary object (see
+    /// [`NonGraphical::dictionary`]).
+    pub(crate) fn dictionary(&self) -> Option<&Dictionary> {
+        match self {
+            Object::Other { object, .. } => object.dictionary(),
+            Object::Entity { .. } => None,
+        }
+    }
+
+    /// [`Object::dictionary`], to change in place.
+    pub(crate) fn dictionary_mut(&mut self) -> Option<&mut Dictionary> {
+        match self {
+            Object::Other { object, .. } => object.dictionary_mut(),
+            Object::Entity { .. } => None,
         }
     }
 

@@ -239,29 +239,7 @@ fn is_kind(obj: &Object, kind: &str) -> bool {
 }
 
 fn is_dictionary(obj: &Object) -> bool {
-    matches!(
-        obj,
-        Object::Other {
-            object: NonGraphical::Dictionary(_) | NonGraphical::DictionaryWithDefault(_),
-            ..
-        }
-    )
-}
-
-/// A dictionary's entries (with or without default), and whether it owns
-/// them.
-pub(super) fn dictionary_entries(obj: &Object) -> Option<(&[(String, Handle)], bool)> {
-    match obj {
-        Object::Other {
-            object: NonGraphical::Dictionary(d),
-            ..
-        } => Some((&d.entries, d.is_hard_owner())),
-        Object::Other {
-            object: NonGraphical::DictionaryWithDefault(d),
-            ..
-        } => Some((&d.dictionary.entries, d.dictionary.is_hard_owner())),
-        _ => None,
-    }
+    obj.dictionary().is_some()
 }
 
 impl Drawing {
@@ -743,9 +721,9 @@ impl<'a> Validator<'a> {
                     EntityList::Owned(v) => (v.clone(), "an attribute"),
                     EntityList::Linked { .. } => (Vec::new(), ""),
                 },
-                o => match dictionary_entries(o) {
-                    Some((entries, true)) => (
-                        entries.iter().map(|&(_, e)| e).collect(),
+                o => match o.dictionary() {
+                    Some(d) if d.is_hard_owner() => (
+                        d.entries.iter().map(|&(_, e)| e).collect(),
                         "a hard-owner dictionary entry",
                     ),
                     _ => (Vec::new(), ""),
@@ -1112,7 +1090,7 @@ impl<'a> Validator<'a> {
     /// and paper space layouts.
     fn named_objects(&mut self) {
         let nod = self.header.dict_named_objects;
-        let Some((entries, _)) = self.get(nod).and_then(dictionary_entries) else {
+        let Some(entries) = self.get(nod).and_then(|o| Some(&o.dictionary()?.entries)) else {
             self.error(
                 None,
                 format!("the named object dictionary {nod} (header) is not a dictionary"),
@@ -1142,7 +1120,10 @@ impl<'a> Validator<'a> {
         let Some(layouts) = layouts else {
             return;
         };
-        let Some((entries, _)) = self.get(layouts).and_then(dictionary_entries) else {
+        let Some(entries) = self
+            .get(layouts)
+            .and_then(|o| Some(&o.dictionary()?.entries))
+        else {
             return;
         };
         let blocks: HashSet<Handle> = entries

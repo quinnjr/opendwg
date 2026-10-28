@@ -261,10 +261,9 @@ impl Builder {
     /// among its reactors.
     fn entry(&mut self, dict: Handle, name: &str, object: NonGraphical) -> Handle {
         let h = self.add(dict, vec![dict], object);
-        match self.other(dict) {
-            NonGraphical::Dictionary(d) => d.entries.push((name.into(), h)),
-            NonGraphical::DictionaryWithDefault(d) => d.dictionary.entries.push((name.into(), h)),
-            _ => unreachable!("{dict} is a dictionary"),
+        match self.other(dict).dictionary_mut() {
+            Some(d) => d.entries.push((name.into(), h)),
+            None => unreachable!("{dict} is a dictionary"),
         }
         h
     }
@@ -1513,16 +1512,8 @@ fn build(h: &HeaderVars) -> BTreeMap<Handle, Object> {
 
     // Dictionary entries sorted by name, as AutoCAD keeps them.
     for obj in b.objects.values_mut() {
-        match obj {
-            Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            } => d.entries.sort_by(|x, y| x.0.cmp(&y.0)),
-            Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            } => d.dictionary.entries.sort_by(|x, y| x.0.cmp(&y.0)),
-            _ => {}
+        if let Some(d) = obj.dictionary_mut() {
+            d.entries.sort_by(|x, y| x.0.cmp(&y.0));
         }
     }
     b.objects
