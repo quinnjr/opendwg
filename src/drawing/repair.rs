@@ -22,9 +22,10 @@
 //! refreshed copies (see `drawing::write`), validates and writes; the
 //! drawing itself is not changed. Each one is a warning, from
 //! [`Drawing::validate`] and [`Drawing::write_diagnostics`]. A repair that
-//! cannot be made (an entry of that name that is not a dictionary, handles
-//! used up) is a warning saying why, and left to validation, which reports
-//! what is missing. The additions are built and checked by the code
+//! cannot be made (handles used up, an addition the API's checks refuse)
+//! is a warning saying why, and left to validation, which reports what is
+//! missing. An entry of the required name that is not a dictionary counts
+//! as present: no repair is made and validation reports it. The additions are built and checked by the code
 //! [`Drawing::add_dim_style`] and [`Drawing::add_object`] use.
 
 use std::collections::BTreeMap;

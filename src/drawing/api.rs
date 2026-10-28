@@ -130,7 +130,7 @@ struct Pending<'a> {
 
 impl<'a> Pending<'a> {
     /// `handles` must be ascending; the adding methods allocate them so
-    /// (see [`Drawing::alloc_handles`]), and `add_family` checks it once
+    /// (see [`Drawing::alloc_handles`]), and `build_family` checks it once
     /// per family.
     fn new(handles: &'a [Handle]) -> Self {
         Pending {
@@ -2361,24 +2361,28 @@ mod tests {
     fn assert_names_fresh(d: &Drawing) {
         let state = d.ref_index.lock();
         for (&list, kept) in &state.names {
-            let (entries, table): (Vec<(String, Handle)>, bool) = match d.objects.get(&list) {
+            // The named entries, and (for a table) every listed handle,
+            // named or not: each must hold the control's names.
+            let (entries, listed): (Vec<(String, Handle)>, Vec<Handle>) = match d.objects.get(&list)
+            {
                 Some(Object::Other {
                     object: NonGraphical::TableControl(c),
                     ..
-                }) => (
-                    d.table_handles(c.kind)
-                        .into_iter()
-                        .filter_map(|h| match d.objects.get(&h) {
+                }) => {
+                    let listed = d.table_handles(c.kind);
+                    let entries = listed
+                        .iter()
+                        .filter_map(|&h| match d.objects.get(&h) {
                             Some(Object::Other { object, .. }) => {
                                 Some((object.table_entry()?.name.clone(), h))
                             }
                             _ => None,
                         })
-                        .collect(),
-                    true,
-                ),
+                        .collect();
+                    (entries, listed)
+                }
                 o => match o.and_then(Object::dictionary) {
-                    Some(x) => (x.entries.clone(), false),
+                    Some(x) => (x.entries.clone(), Vec::new()),
                     None => panic!("{list} is indexed by name but is no list"),
                 },
             };
@@ -2387,13 +2391,11 @@ mod tests {
                 fresh.entry(fold_name(n)).or_default().push(*h);
             }
             assert_eq!(kept, &fresh, "the names of {list} are stale");
-            if table {
-                for (_, h) in &entries {
-                    assert!(
-                        state.name_holders.get(h).is_some_and(|c| c.contains(&list)),
-                        "{h} does not name {list} among its holders"
-                    );
-                }
+            for h in &listed {
+                assert!(
+                    state.name_holders.get(h).is_some_and(|c| c.contains(&list)),
+                    "{h} does not name {list} among its holders"
+                );
             }
         }
         for (h, holders) in &state.name_holders {
