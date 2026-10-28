@@ -975,7 +975,7 @@ pub(super) fn is_standard_visual_style(name: &str) -> bool {
 }
 
 /// The values most standard visual styles share, by property position
-/// (see [`VISUAL_STYLE_KINDS`]), each with its DXF 176 value.
+/// (see [`crate::object::VISUAL_STYLE_KINDS`]), each with its DXF 176 value.
 #[rustfmt::skip]
 const VISUAL_STYLE_DEFAULTS: [(P, i16); 58] = [
     (I(2), 1), (I(2), 1), (I(1), 1), (I(0), 1),
