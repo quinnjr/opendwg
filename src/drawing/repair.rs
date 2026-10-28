@@ -132,17 +132,18 @@ impl Drawing {
     }
 
     /// Whether the named object dictionary is a dictionary without an entry
-    /// `name`.
+    /// `name`, compared without case (as AutoCAD looks keys up, and
+    /// [`Drawing::add_object`] refuses a second entry of the name).
     fn lacks_named_dictionary(&self, name: &str) -> bool {
         match self.objects.get(&self.header.dict_named_objects) {
             Some(Object::Other {
                 object: NonGraphical::Dictionary(d),
                 ..
-            }) => !d.entries.iter().any(|(n, _)| n == name),
+            }) => !d.entries.iter().any(|(n, _)| names_eq(n, name)),
             Some(Object::Other {
                 object: NonGraphical::DictionaryWithDefault(d),
                 ..
-            }) => !d.dictionary.entries.iter().any(|(n, _)| n == name),
+            }) => !d.dictionary.entries.iter().any(|(n, _)| names_eq(n, name)),
             _ => false,
         }
     }
@@ -296,6 +297,33 @@ mod tests {
             .unwrap();
         assert_ne!(*listed, other);
         assert_eq!(back.header.dict_plotsettings, *listed);
+    }
+
+    /// A named object dictionary key differing only in case
+    /// (`acad_plotsettings`) is the required entry, as AutoCAD looks keys
+    /// up: nothing is added, and validation finds nothing missing.
+    #[test]
+    fn named_dictionary_keys_compare_without_case() {
+        let mut d = Drawing::new();
+        let nod = d.header.dict_named_objects;
+        if let Some(Object::Other {
+            object: NonGraphical::Dictionary(n),
+            ..
+        }) = d.objects.get_mut(&nod)
+        {
+            for (name, _) in &mut n.entries {
+                if name == "ACAD_PLOTSETTINGS" {
+                    *name = "acad_plotsettings".into();
+                }
+            }
+        }
+        d.ref_index = Default::default();
+        assert!(d.repaired().is_none());
+        assert!(d.validate().is_empty(), "{:?}", d.validate());
+        let (bytes, diags) = d.to_bytes_with_diagnostics().unwrap();
+        assert!(diags.is_empty(), "{diags:?}");
+        let back = Drawing::from_bytes(&bytes).unwrap();
+        assert_eq!(back.objects.len(), d.objects.len());
     }
 
     /// A named object dictionary without `ACAD_PLOTSETTINGS` (civilcraft's

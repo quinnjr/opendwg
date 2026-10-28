@@ -96,6 +96,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::Drawing;
+use super::api::names_eq;
 use super::refs::{RefIndex, object_refs};
 use super::write::{Changes, WriteWork};
 use crate::diag::{Diagnostic, Severity};
@@ -1116,7 +1117,11 @@ impl<'a> Validator<'a> {
         let name = self.name(nod);
         let mut layouts = None;
         for required in NAMED_OBJECTS {
-            let entry = entries.iter().find(|(n, _)| n == required).map(|&(_, h)| h);
+            // Keys compare without case, as AutoCAD looks them up.
+            let entry = entries
+                .iter()
+                .find(|(n, _)| names_eq(n, required))
+                .map(|&(_, h)| h);
             match entry.and_then(|h| self.get(h).map(|o| (h, o))) {
                 Some((h, o)) if is_dictionary(o) => {
                     if required == "ACAD_LAYOUT" {

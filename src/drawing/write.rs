@@ -875,10 +875,17 @@ impl Drawing {
                     "a style with 2dWireframe's settings under its own name"
                 }
             );
+            // The common data as refreshed so far (a null owner set, the
+            // data storage flag derived, ...), not as stored.
+            let common = changes
+                .replaced
+                .get(&h)
+                .map_or(common, Object::object_common)
+                .clone();
             changes.replaced.insert(
                 h,
                 Object::Other {
-                    common: common.clone(),
+                    common,
                     object: NonGraphical::VisualStyle(Box::new(style)),
                 },
             );
@@ -3104,6 +3111,68 @@ mod tests {
         }
         // The drawing itself keeps the raw objects.
         assert!(styles.iter().all(|h| d.objects[h].raw().is_some()));
+    }
+
+    /// A replaced VISUALSTYLE keeps the refreshes made to its common data
+    /// before (here its null owner, set to the hard-owner dictionary that
+    /// lists it), not the common data as stored.
+    #[test]
+    fn replaced_visual_style_keeps_earlier_refreshes() {
+        use crate::object::RawObject;
+        let mut d = Drawing::new();
+        let (dict, style) = d
+            .objects
+            .iter()
+            .find_map(|(&h, o)| match o {
+                Object::Other {
+                    object: NonGraphical::Dictionary(x),
+                    ..
+                } => x
+                    .entries
+                    .iter()
+                    .find(|&&(_, e)| d.objects[&e].type_name() == "VISUALSTYLE")
+                    .map(|&(_, e)| (h, e)),
+                _ => None,
+            })
+            .unwrap();
+        if let Some(Object::Other {
+            object: NonGraphical::Dictionary(x),
+            ..
+        }) = d.objects.get_mut(&dict)
+        {
+            x.hard_owner = 1;
+        }
+        let Some(Object::Other { common, object }) = d.objects.get_mut(&style) else {
+            panic!()
+        };
+        common.owner = Handle(0);
+        *object = NonGraphical::Unknown(RawObject {
+            type_code: 500,
+            class_name: Some("VISUALSTYLE".into()),
+            source_version: Version::R2007,
+            data: vec![0x55],
+            data_bits: 7,
+            strings: None,
+            handles: Vec::new(),
+            tail_handles_raw: Vec::new(),
+            tail_handle_bits: 0,
+        });
+        d.ref_index = Default::default();
+        let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+        assert!(
+            warnings.iter().any(|w| w.message.contains("owner is null")),
+            "{warnings:?}"
+        );
+        let back = Drawing::from_bytes(&bytes).unwrap();
+        let Some(Object::Other {
+            common,
+            object: NonGraphical::VisualStyle(_),
+        }) = back.get(style)
+        else {
+            panic!("{style} not an R2018 visual style");
+        };
+        assert_eq!(common.owner, dict);
+        assert!(back.validate().is_empty(), "{:?}", back.validate());
     }
 
     #[test]
