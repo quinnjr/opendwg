@@ -739,11 +739,9 @@ impl Drawing {
     /// included), unless the largest handle is the largest possible one
     /// (which validation refuses).
     pub(super) fn next_handseed(&self, changes: &Changes) -> Handle {
-        let past = changes
-            .handles(self)
-            .last()
-            .map_or(1, |h| h.0.saturating_add(1));
-        Handle(changes.header(self).handseed.0.max(past))
+        let last = changes.handles(self).last();
+        let seed = super::api::normalised_seed(changes.header(self).handseed, last);
+        Handle(seed.0.max(1))
     }
 
     /// The objects in write order: as read, then the others (the added

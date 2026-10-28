@@ -61,34 +61,45 @@ pub(super) fn invalid(handle: Option<Handle>, message: impl Into<String>) -> Err
     }])
 }
 
-/// Symbol table names compare without case, as in AutoCAD.
-pub(super) fn names_eq(a: &str, b: &str) -> bool {
-    a.chars()
-        .flat_map(char::to_lowercase)
-        .eq(b.chars().flat_map(char::to_lowercase))
+/// The characters of `name` without case: symbol table names (and
+/// dictionary keys) compare so, as in AutoCAD. The one definition behind
+/// [`names_eq`] and [`fold_name`].
+fn folded(name: &str) -> impl Iterator<Item = char> + '_ {
+    name.chars().flat_map(char::to_lowercase)
 }
 
-/// `name` folded as [`names_eq`] compares it: two names are equal without
-/// case exactly when their folded forms are equal.
+/// Whether two names are equal without case (see [`folded`]).
+pub(super) fn names_eq(a: &str, b: &str) -> bool {
+    folded(a).eq(folded(b))
+}
+
+/// `name` without case (see [`folded`]), as the name index keys it: two
+/// names are equal without case exactly when these are equal.
 pub(super) fn fold_name(name: &str) -> String {
-    name.chars().flat_map(char::to_lowercase).collect()
+    folded(name).collect()
+}
+
+/// `$HANDSEED` `seed` of a drawing whose largest handle is `last`, moved
+/// past `last` when it is not above it (a damaged file), so a handle once
+/// used is never given again. When `last` is the largest possible handle (a
+/// hostile file) the seed becomes that handle: the handles are used up.
+pub(super) fn normalised_seed(seed: Handle, last: Option<Handle>) -> Handle {
+    match last {
+        Some(last) if seed <= last => Handle(last.0.saturating_add(1)),
+        _ => seed,
+    }
 }
 
 /// The `n` consecutive handles [`Drawing::alloc_handles`] gives when the
-/// seed is `seed` and the largest handle `last`, and the seed after them: a
-/// seed not above `last` is moved past it first (see
-/// `Drawing::normalise_seed`). [`Error::Invalid`] when the handles are used
-/// up.
+/// seed is `seed` and the largest handle `last`, and the seed after them,
+/// starting from the [`normalised_seed`]. [`Error::Invalid`] when the
+/// handles are used up.
 pub(super) fn next_handles(
     seed: Handle,
     last: Option<Handle>,
     n: usize,
 ) -> Result<(Vec<Handle>, Handle)> {
-    let seed = match last {
-        Some(last) if seed <= last => Handle(last.0.saturating_add(1)),
-        _ => seed,
-    };
-    let first = seed.0.max(1);
+    let first = normalised_seed(seed, last).0.max(1);
     let past = last.is_none_or(|last| last.0 < first);
     match u64::try_from(n).ok().and_then(|n| first.checked_add(n)) {
         // `end` is at most the largest handle, never given.
@@ -745,17 +756,12 @@ impl Drawing {
 
     // ---- handles ----
 
-    /// Move a `$HANDSEED` that is not above every handle (a damaged file)
-    /// past them, so a handle once used is never given again, even after its
-    /// object is removed. Every mutation starts with it. When the largest
-    /// handle is the largest possible one (a hostile file) the seed becomes
-    /// that handle: the handles are used up, and stay so after removals.
+    /// Make `$HANDSEED` the [`normalised_seed`], so a handle once used is
+    /// never given again, even after its object is removed (used-up handles
+    /// stay so). Every mutation starts with it.
     fn normalise_seed(&mut self) {
-        if let Some((&last, _)) = self.objects.last_key_value() {
-            if self.header.handseed <= last {
-                self.header.handseed = Handle(last.0.saturating_add(1));
-            }
-        }
+        let last = self.objects.last_key_value().map(|(&h, _)| h);
+        self.header.handseed = normalised_seed(self.header.handseed, last);
     }
 
     /// Allocate a handle for a new object: the header's `$HANDSEED`, which
@@ -783,13 +789,9 @@ impl Drawing {
     /// error nothing changes, the seed included.
     fn alloc_handles(&mut self, n: usize) -> Result<Vec<Handle>> {
         let last = self.objects.last_key_value().map(|(&h, _)| h);
-        match next_handles(self.header.handseed, last, n) {
-            Ok((handles, seed)) => {
-                self.header.handseed = seed;
-                Ok(handles)
-            }
-            Err(e) => Err(e),
-        }
+        let (handles, seed) = next_handles(self.header.handseed, last, n)?;
+        self.header.handseed = seed;
+        Ok(handles)
     }
 
     // ---- adding ----
@@ -2382,6 +2384,20 @@ mod tests {
     /// seed reaches it, allocation fails (the seed unchanged), also after
     /// that object is removed; several handles at once are consecutive, and
     /// a stale seed moves past every handle.
+    #[test]
+    fn normalised_seed_moves_past_the_last_handle() {
+        for (seed, last, want) in [
+            (5, None, 5),
+            (5, Some(3), 5),
+            (4, Some(4), 5),
+            (1, Some(9), 10),
+            (1, Some(u64::MAX), u64::MAX),
+        ] {
+            let got = normalised_seed(Handle(seed), last.map(Handle));
+            assert_eq!(got, Handle(want), "{seed} {last:?}");
+        }
+    }
+
     #[test]
     fn alloc_handle_at_the_end_of_the_handle_space() {
         let exhausted = |r: Result<Vec<Handle>>| matches!(r, Err(Error::Invalid(d)) if d[0].message.contains("used up"));
