@@ -1021,10 +1021,11 @@ impl Drawing {
     /// (at any depth of nested inserts), for common data with an
     /// extension dictionary, for a layer that is not a layer or a linetype
     /// that is not a linetype, for a multiline whose line count is not its
-    /// style's element count, for an entity that cannot be encoded as R2018
-    /// and for an entity of a class
-    /// type the library has no class definition of. A reference to a missing
-    /// object is [`Error::NotFound`]. On error nothing changes.
+    /// style's element count, and for an entity of a class type the library
+    /// has no class definition of. An entity that cannot be encoded as R2018
+    /// (its extended data included: an application without items, a binary
+    /// chunk over 255 bytes, ...) is [`Error::Encode`]; a reference to a
+    /// missing object is [`Error::NotFound`]. On error nothing changes.
     ///
     /// A TEXT or MTEXT with a null style (as [`crate::object::Text::new`]
     /// and [`crate::object::MText::new`] leave it) gets the current text
@@ -1508,9 +1509,9 @@ impl Drawing {
     /// entries, layouts) or that own other objects (a group, sort table or
     /// other object listing entities, an image definition reactor, a
     /// dictionary that already has entries: add it empty, then its
-    /// entries), common
-    /// data with an extension dictionary, and an object that cannot be
-    /// encoded as R2018. A reference to a missing object is
+    /// entries), and common data with an extension dictionary. An object
+    /// that cannot be encoded as R2018 (its extended data included) is
+    /// [`Error::Encode`]; a reference to a missing object is
     /// [`Error::NotFound`]. On error nothing changes.
     pub fn add_object(
         &mut self,
@@ -2697,10 +2698,11 @@ mod tests {
     }
 
     /// Extended data that cannot be encoded as R2018 (an application with no
-    /// items, a binary chunk over 255 bytes) is refused for a new entity
-    /// and a new object, nothing changes, and removals still work (an
-    /// accepted object whose references could not be listed would make the
-    /// index refuse every removal).
+    /// items, a binary chunk over 255 bytes) is refused with
+    /// [`Error::Encode`] for a new entity and a new object, nothing changes,
+    /// and removals still work (an accepted object whose references could
+    /// not be listed would make the index refuse every removal). Extended
+    /// data at the limits (a 255-byte chunk, a string) is accepted.
     #[test]
     fn unencodable_extended_data_is_refused() {
         use crate::object::XDataApp;
@@ -2732,29 +2734,53 @@ mod tests {
                 items: vec![XDataItem::Binary(vec![0; 256])],
             },
         ];
-        for xdata in bad {
-            let (count, seed) = (d.objects.len(), d.header.handseed);
-            let mut common = EntityCommon::new(l0);
-            common.obj.xdata = vec![xdata.clone()];
-            let entity = Entity::Line(Line {
+        let good = [
+            XDataApp {
+                app,
+                items: vec![XDataItem::Binary(vec![0; 255])],
+            },
+            XDataApp {
+                app,
+                items: vec![XDataItem::String("x".into())],
+            },
+        ];
+        let entity = || {
+            Entity::Line(Line {
                 start: [0.0; 3],
                 end: [1.0; 3],
                 thickness: 0.0,
                 extrusion: [0.0, 0.0, 1.0],
-            });
-            assert!(d.add_entity(ms, common, entity).is_err(), "{xdata:?}");
+            })
+        };
+        // `add_object` gives a new object empty common data; the check it
+        // runs is the one for an object with this extended data.
+        let object = |handle, xdata: &XDataApp| Object::Other {
+            common: ObjectCommon {
+                handle,
+                xdata: vec![xdata.clone()],
+                ..ObjectCommon::new()
+            },
+            object: NonGraphical::Placeholder,
+        };
+        let says =
+            |e: Option<&Error>| matches!(e, Some(Error::Encode(m)) if m.contains("extended data"));
+        for xdata in bad {
+            let (count, seed) = (d.objects.len(), d.header.handseed);
+            let mut common = EntityCommon::new(l0);
+            common.obj.xdata = vec![xdata.clone()];
+            let added = d.add_entity(ms, common, entity());
+            assert!(says(added.as_ref().err()), "{xdata:?}: {added:?}");
             assert_eq!((d.objects.len(), d.header.handseed), (count, seed));
-            // `add_object` gives a new object empty common data; the check it
-            // runs refuses such an object all the same.
-            let obj = Object::Other {
-                common: ObjectCommon {
-                    handle: seed,
-                    xdata: vec![xdata.clone()],
-                    ..ObjectCommon::new()
-                },
-                object: NonGraphical::Placeholder,
-            };
-            assert!(d.check_new(&obj, &[seed]).is_err(), "{xdata:?}");
+            let checked = d.check_new(&object(seed, &xdata), &[seed]);
+            assert!(says(checked.as_ref().err()), "{xdata:?}: {checked:?}");
+        }
+        for xdata in good {
+            let seed = d.header.handseed;
+            d.check_new(&object(seed, &xdata), &[seed]).unwrap();
+            let mut common = EntityCommon::new(l0);
+            common.obj.xdata = vec![xdata.clone()];
+            let h = d.add_entity(ms, common, entity()).unwrap();
+            assert_eq!(d.get(h).unwrap().object_common().xdata, [xdata]);
         }
         d.remove(kept).unwrap();
         assert!(d.get(kept).is_none());
