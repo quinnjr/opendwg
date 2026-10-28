@@ -139,6 +139,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::Path;
 
+use super::validate::dictionary_entries;
 use super::{Drawing, own_layout_viewports};
 use crate::container::{
     R2004_PLAIN_HEADER_LEN, RawSections, SectionMeta, SectionName, r2018_preview_address,
@@ -959,9 +960,11 @@ impl Drawing {
 
     /// The objects listed as owned that store a null owner, with their
     /// lister and a warning: an extension dictionary, an entry of a
-    /// hard-owner dictionary. AutoCAD 2002 and 2004 wrote a DIMSTYLE's R14
-    /// round-trip extension dictionary and its XRECORD so (`arx-02`,
-    /// `arx-03` of the extended corpus).
+    /// hard-owner dictionary (with or without default). AutoCAD 2002 and
+    /// 2004 wrote a DIMSTYLE's R14 round-trip extension dictionary and its
+    /// XRECORD so (`arx-02`, `arx-03` of the extended corpus). An object
+    /// two objects list is left to `validate()`, which refuses it: which
+    /// one owns it is not known.
     fn null_owners(&self) -> Vec<(Handle, Handle, Diagnostic)> {
         let null = |h: Handle| matches!(self.objects.get(&h), Some(Object::Other { common, .. }) if common.owner.0 == 0);
         let name = |h: Handle| {
@@ -969,35 +972,41 @@ impl Drawing {
                 .get(&h)
                 .map_or_else(|| h.to_string(), |o| format!("{} {h}", o.type_name()))
         };
-        let mut out: Vec<(Handle, Handle, Diagnostic)> = Vec::new();
-        let mut seen = HashSet::new();
+        // For each child, its listers and how the first lists it, in the
+        // order first found.
+        let mut found: Vec<(Handle, Handle, &str)> = Vec::new();
+        let mut listers: HashMap<Handle, BTreeSet<Handle>> = HashMap::new();
         for (&h, obj) in &self.objects {
             let mut listed = Vec::new();
             if let Some(x) = obj.object_common().xdict {
                 listed.push((x, "its extension dictionary"));
             }
-            if let Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            } = obj
-            {
-                if d.is_hard_owner() {
-                    listed.extend(d.entries.iter().map(|&(_, e)| (e, "an entry")));
-                }
+            if let Some((entries, true)) = dictionary_entries(obj) {
+                listed.extend(entries.iter().map(|&(_, e)| (e, "an entry")));
             }
             for (child, how) in listed {
-                if child != h && null(child) && seen.insert(child) {
-                    let message = format!(
-                        "{}: its owner is null, but {} lists it as {how}; it is written with \
-                         that owner",
-                        name(child),
-                        name(h)
-                    );
-                    out.push((child, h, warning(Some(child), message)));
+                if child != h && null(child) {
+                    let by = listers.entry(child).or_default();
+                    if by.is_empty() {
+                        found.push((child, h, how));
+                    }
+                    by.insert(h);
                 }
             }
         }
-        out
+        found
+            .into_iter()
+            .filter(|(child, _, _)| listers[child].len() == 1)
+            .map(|(child, h, how)| {
+                let message = format!(
+                    "{}: its owner is null, but {} lists it as {how}; it is written with \
+                     that owner",
+                    name(child),
+                    name(h)
+                );
+                (child, h, warning(Some(child), message))
+            })
+            .collect()
     }
 
     /// Set the null owners [`Drawing::null_owners`] finds (step 2), but not
@@ -2910,12 +2919,67 @@ mod tests {
         assert_eq!(written_plot_view(&bytes, layout), Handle(0));
     }
 
-    /// An extension dictionary and a hard-owner dictionary's entry that
-    /// store a null owner (AutoCAD 2002's R14 round-trip dictionary of a
-    /// DIMSTYLE and its XRECORD: `arx-02` of the extended corpus) are
-    /// written with their lister as owner, with a warning each.
+    /// An extension dictionary and a hard-owner dictionary's entry (with or
+    /// without default) that store a null owner (AutoCAD 2002's R14
+    /// round-trip dictionary of a DIMSTYLE and its XRECORD: `arx-02` of the
+    /// extended corpus) are written with their lister as owner, with a
+    /// warning each.
     #[test]
     fn null_owners_of_listed_objects_are_set() {
+        for with_default in [false, true] {
+            let mut d = Drawing::new();
+            let layers = d.header.layer_control;
+            let xdict = d.get(layers).unwrap().object_common().xdict.unwrap();
+            let Some(Object::Other {
+                object: NonGraphical::Dictionary(x),
+                ..
+            }) = d.get(xdict)
+            else {
+                panic!("an extension dictionary");
+            };
+            assert!(x.is_hard_owner());
+            let (_, states) = x.entries[0].clone();
+            if with_default {
+                let Some(Object::Other { object, .. }) = d.get_mut(xdict) else {
+                    panic!()
+                };
+                let NonGraphical::Dictionary(x) = object.clone() else {
+                    panic!()
+                };
+                *object = NonGraphical::DictionaryWithDefault(crate::object::DictionaryWithDefault {
+                    dictionary: x,
+                    default_entry: states,
+                });
+            }
+            for h in [xdict, states] {
+                d.get_mut(h).unwrap().object_common_mut().owner = Handle(0);
+            }
+            let diags = d.validate();
+            assert!(
+                diags.iter().all(|x| x.severity != Severity::Error),
+                "{diags:#?}"
+            );
+            let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
+            let named: Vec<Option<Handle>> = warnings
+                .iter()
+                .filter(|w| w.message.contains("null"))
+                .map(|w| w.handle)
+                .collect();
+            assert_eq!(named, [Some(xdict), Some(states)], "{warnings:#?}");
+            let back = Drawing::from_bytes(&bytes).unwrap();
+            assert_eq!(back.get(xdict).unwrap().object_common().owner, layers);
+            assert_eq!(back.get(states).unwrap().object_common().owner, xdict);
+            assert!(back.validate().is_empty(), "{:#?}", back.validate());
+            assert_eq!(d.get(xdict).unwrap().object_common().owner, Handle(0));
+        }
+    }
+
+    /// An object with a null owner that two objects list (here an
+    /// extension dictionary's entry, also another object's extension
+    /// dictionary) is not given either as owner: `validate()` refuses it,
+    /// and neither the write nor `write_diagnostics` reports a repair.
+    #[test]
+    fn null_owner_listed_twice_is_not_repaired() {
         let mut d = Drawing::new();
         let layers = d.header.layer_control;
         let xdict = d.get(layers).unwrap().object_common().xdict.unwrap();
@@ -2926,28 +2990,23 @@ mod tests {
         else {
             panic!("an extension dictionary");
         };
-        assert!(x.is_hard_owner());
         let (_, states) = x.entries[0].clone();
-        for h in [xdict, states] {
-            d.get_mut(h).unwrap().object_common_mut().owner = Handle(0);
-        }
-        let diags = d.validate();
-        assert!(
-            diags.iter().all(|x| x.severity != Severity::Error),
-            "{diags:#?}"
-        );
-        let (bytes, warnings) = d.to_bytes_with_diagnostics().unwrap();
-        let named: Vec<Option<Handle>> = warnings
-            .iter()
-            .filter(|w| w.message.contains("null"))
-            .map(|w| w.handle)
+        d.get_mut(states).unwrap().object_common_mut().owner = Handle(0);
+        let linetypes = d.header.linetype_control;
+        d.get_mut(linetypes).unwrap().object_common_mut().xdict = Some(states);
+        let repaired = |diags: &[Diagnostic]| {
+            diags
+                .iter()
+                .any(|w| w.handle == Some(states) && w.message.contains("owner is null"))
+        };
+        assert!(!repaired(&d.write_diagnostics()));
+        let errors: Vec<_> = d
+            .validate()
+            .into_iter()
+            .filter(|x| x.severity == Severity::Error && x.handle == Some(states))
             .collect();
-        assert_eq!(named, [Some(xdict), Some(states)], "{warnings:#?}");
-        let back = Drawing::from_bytes(&bytes).unwrap();
-        assert_eq!(back.get(xdict).unwrap().object_common().owner, layers);
-        assert_eq!(back.get(states).unwrap().object_common().owner, xdict);
-        assert!(back.validate().is_empty(), "{:#?}", back.validate());
-        assert_eq!(d.get(xdict).unwrap().object_common().owner, Handle(0));
+        assert!(!errors.is_empty());
+        assert!(matches!(d.to_bytes(), Err(Error::Invalid(_))));
     }
 
     /// When the file cannot be laid out (a summary title too long to

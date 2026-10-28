@@ -46,7 +46,8 @@ use crate::object::tables::{HARD_OWNER, SOFT_OWNER, SOFT_POINTER};
 use crate::object::{
     Attrib, Block, BlockRecord, DictionaryWithDefault, DimStyle, Entity, EntityCommon, EntityList,
     ImageDefReactor, Layer, Layout, Linetype, LinetypeRef, MInsert, NonGraphical, Object,
-    ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, type_refs,
+    ObjWriter, ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, encode_entity_common,
+    encode_object_common, type_refs,
 };
 use crate::section::DxfClass;
 use crate::section::classes::{FIRST_CLASS_NUMBER, known_class};
@@ -699,10 +700,13 @@ impl Drawing {
 
     /// Check a new object: its common data has no extension dictionary (it
     /// cannot share one) and every reactor exists; every reference it makes
-    /// is to an existing object or one in `pending` (added with it), and it
-    /// can be encoded as R2018; an entity's layer is a layer, its linetype a
-    /// linetype, and a multiline has as many lines as its style has
-    /// elements (the kind checks of `validate()`).
+    /// is to an existing object or one in `pending` (added with it, in
+    /// ascending order), and it can be encoded as R2018, its common data
+    /// (extended data) included, with every reference listed (else the
+    /// reference index could not account for it, and removals would be
+    /// refused); an entity's layer is a layer, its linetype a linetype, and
+    /// a multiline has as many lines as its style has elements (the kind
+    /// checks of `validate()`).
     fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
         let common = obj.object_common();
         if common.xdict.is_some() {
@@ -711,12 +715,30 @@ impl Drawing {
                 "a new object cannot have an extension dictionary",
             ));
         }
-        let exists = |h: Handle| self.objects.contains_key(&h) || pending.contains(&h);
+        // A binary search: a family's new handles are many (a polyline's
+        // vertices), and each makes several references.
+        let new = |h: Handle| pending.binary_search(&h).is_ok();
+        let exists = |h: Handle| self.objects.contains_key(&h) || new(h);
         if let Some(&r) = common.reactors.iter().find(|&&r| !exists(r)) {
             return Err(Error::NotFound(r));
         }
         type_refs(obj).1?;
-        if let Some((t, _)) = object_refs(obj).0.into_iter().find(|&(t, _)| !exists(t)) {
+        // The common data's encoder checks the extended data (no empty
+        // application, binary chunks of at most 255 bytes, at most 65535
+        // bytes per application, ...).
+        let mut w = ObjWriter::recording(common.handle);
+        match obj {
+            Object::Entity { common, .. } => encode_entity_common(&mut w, common)?,
+            Object::Other { common, .. } => encode_object_common(&mut w, common)?,
+        }
+        let (refs, complete) = object_refs(obj);
+        if !complete {
+            return Err(invalid(
+                Some(common.handle),
+                "the object's references cannot all be listed: it cannot be encoded as R2018",
+            ));
+        }
+        if let Some((t, _)) = refs.into_iter().find(|&(t, _)| !exists(t)) {
             return Err(Error::NotFound(t));
         }
         if let Object::Entity { common, .. } = obj {
@@ -726,7 +748,7 @@ impl Drawing {
                     object: NonGraphical::Layer(_),
                     ..
                 })
-            ) && !pending.contains(&common.layer)
+            ) && !new(common.layer)
             {
                 return Err(invalid(
                     Some(common.obj.handle),
@@ -742,7 +764,7 @@ impl Drawing {
                         object: NonGraphical::Linetype(_),
                         ..
                     })
-                ) && !pending.contains(&lt)
+                ) && !new(lt)
                 {
                     return Err(invalid(
                         Some(common.obj.handle),
@@ -2265,6 +2287,112 @@ mod tests {
             assert_index_fresh(&d);
         }
         assert_eq!(deltas[0], deltas[1], "independent of the drawing's size");
+    }
+
+    /// Extended data that cannot be encoded as R2018 (an application with no
+    /// items, a binary chunk over 255 bytes) is refused for a new entity
+    /// and a new object, nothing changes, and removals still work (an
+    /// accepted object whose references could not be listed would make the
+    /// index refuse every removal).
+    #[test]
+    fn unencodable_extended_data_is_refused() {
+        use crate::object::XDataApp;
+        let mut d = Drawing::new();
+        let kept = line(&mut d, 0);
+        let ms = d.model_space();
+        let l0 = d.layer_by_name("0").unwrap();
+        let app = d
+            .objects
+            .iter()
+            .find(|(_, o)| {
+                matches!(
+                    o,
+                    Object::Other {
+                        object: NonGraphical::AppId(_),
+                        ..
+                    }
+                )
+            })
+            .map(|(&h, _)| h)
+            .unwrap();
+        let bad = [
+            XDataApp {
+                app,
+                items: Vec::new(),
+            },
+            XDataApp {
+                app,
+                items: vec![XDataItem::Binary(vec![0; 256])],
+            },
+        ];
+        for xdata in bad {
+            let (count, seed) = (d.objects.len(), d.header.handseed);
+            let mut common = EntityCommon::new(l0);
+            common.obj.xdata = vec![xdata.clone()];
+            let entity = Entity::Line(Line {
+                start: [0.0; 3],
+                end: [1.0; 3],
+                thickness: 0.0,
+                extrusion: [0.0, 0.0, 1.0],
+            });
+            assert!(d.add_entity(ms, common, entity).is_err(), "{xdata:?}");
+            assert_eq!((d.objects.len(), d.header.handseed), (count, seed));
+            // `add_object` gives a new object empty common data; the check it
+            // runs refuses such an object all the same.
+            let obj = Object::Other {
+                common: ObjectCommon {
+                    handle: seed,
+                    xdata: vec![xdata.clone()],
+                    ..ObjectCommon::new()
+                },
+                object: NonGraphical::Placeholder,
+            };
+            assert!(d.check_new(&obj, &[seed]).is_err(), "{xdata:?}");
+        }
+        d.remove(kept).unwrap();
+        assert!(d.get(kept).is_none());
+    }
+
+    /// A polyline with 100k vertices is added in time linear in its
+    /// vertices: the check that each child's references are to existing or
+    /// new objects does not scan the new handles per reference.
+    #[test]
+    fn adding_a_long_polyline_is_linear() {
+        use crate::object::{Polyline3d, Vertex3d};
+        let mut d = Drawing::new();
+        let ms = d.model_space();
+        let l0 = d.layer_by_name("0").unwrap();
+        let poly = Entity::Polyline3d(Polyline3d {
+            spline_flags: 0,
+            closed_flags: 0,
+            vertices: EntityList::Owned(Vec::new()),
+            seqend: Handle(0),
+        });
+        let n = 100_000;
+        let before = d.objects.len();
+        let vertices = (0..n)
+            .map(|i| {
+                let vertex = Vertex3d {
+                    flags: 32,
+                    point: [i as f64, 0.0, 0.0],
+                };
+                (EntityCommon::new(l0), Entity::Vertex3d(vertex))
+            })
+            .collect();
+        let start = std::time::Instant::now();
+        let h = d
+            .add_polyline(ms, (EntityCommon::new(l0), poly), vertices)
+            .unwrap();
+        let took = start.elapsed();
+        assert_eq!(d.objects.len(), before + n + 2);
+        assert!(d.get(h).is_some());
+        // Quadratic work (over 1e10 handle comparisons) took 1.9 s in
+        // release; linear work takes about 0.25 s.
+        let bound = if cfg!(debug_assertions) { 10 } else { 1 };
+        assert!(
+            took < std::time::Duration::from_secs(bound),
+            "adding {n} vertices took {took:?}"
+        );
     }
 
     /// Removing k entities at once from a block of 1k or of 100k entities

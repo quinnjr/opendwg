@@ -243,7 +243,9 @@ fn is_dictionary(obj: &Object) -> bool {
     )
 }
 
-fn dictionary_entries(obj: &Object) -> Option<(&[(String, Handle)], bool)> {
+/// A dictionary's entries (with or without default), and whether it owns
+/// them.
+pub(super) fn dictionary_entries(obj: &Object) -> Option<(&[(String, Handle)], bool)> {
     match obj {
         Object::Other {
             object: NonGraphical::Dictionary(d),
