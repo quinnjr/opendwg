@@ -379,6 +379,21 @@ pub(super) struct WriteWork {
     viewport_steps: usize,
 }
 
+/// What [`Drawing::sections`] lays out.
+struct Sections {
+    /// The header as written.
+    header: HeaderVars,
+    /// The summary information.
+    summary: Vec<u8>,
+    /// The preview address.
+    preview_address: u64,
+    /// The sections other than the objects, the object map, the header,
+    /// the classes and the data storage.
+    sections: BTreeMap<SectionName, Vec<u8>>,
+    /// The warnings about sections left out.
+    warnings: Vec<Diagnostic>,
+}
+
 /// What [`Drawing::drops`] finds.
 #[derive(Debug, Default)]
 struct Drops {
@@ -583,7 +598,7 @@ impl Drawing {
             // A layout that fails is one more warning: those found so far
             // are kept.
             match self.sections(saved, written, &changes) {
-                Ok((_, _, _, _, warnings)) => diags.extend(warnings),
+                Ok(s) => diags.extend(s.warnings),
                 Err(e) => diags.push(warning(None, format!("the file cannot be laid out: {e}"))),
             }
             return Ok((Vec::new(), diags));
@@ -601,31 +616,23 @@ impl Drawing {
         Ok((bytes, diags))
     }
 
-    /// The header as written, the summary information, the preview address
-    /// and the sections other than the objects, the object map, the header,
-    /// the classes and the data storage, with the warnings about sections
-    /// left out, for a file of `objects` objects.
-    #[allow(clippy::type_complexity)]
-    fn sections(
-        &self,
-        saved: JulianDate,
-        objects: usize,
-        changes: &Changes,
-    ) -> Result<(
-        HeaderVars,
-        Vec<u8>,
-        u64,
-        BTreeMap<SectionName, Vec<u8>>,
-        Vec<Diagnostic>,
-    )> {
+    /// The layout of a file of `objects` objects but the objects, the object
+    /// map, the header, the classes and the data storage (see [`Sections`]).
+    fn sections(&self, saved: JulianDate, objects: usize, changes: &Changes) -> Result<Sections> {
         let mut header = changes.header(self).clone();
         header.handseed = self.next_handseed(changes);
         header.tdupdate = saved;
         let summary = self.summary.clone().unwrap_or_default();
         let summary = summary.encode_r2018(&header)?;
         let preview_address = r2018_preview_address(Some(summary.len()))?;
-        let (sections, diags) = self.other_sections(&header, objects, preview_address);
-        Ok((header, summary, preview_address, sections, diags))
+        let (sections, warnings) = self.other_sections(&header, objects, preview_address);
+        Ok(Sections {
+            header,
+            summary,
+            preview_address,
+            sections,
+            warnings,
+        })
     }
 
     /// The file, with the objects as `changes` has them (steps 4 and 5 of the
@@ -659,8 +666,13 @@ impl Drawing {
         }
         work.class_probes += index.probes.get();
 
-        let (header, summary, preview_address, mut sections, diags) =
-            self.sections(saved, map.len(), &changes)?;
+        let Sections {
+            header,
+            summary,
+            preview_address,
+            mut sections,
+            warnings: diags,
+        } = self.sections(saved, map.len(), &changes)?;
         let mut classes = self.classes.clone();
         for c in &mut classes {
             let now = counts.get(&c.class_number).copied().unwrap_or(0);
