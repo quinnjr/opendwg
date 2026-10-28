@@ -53,7 +53,7 @@ use crate::section::classes::{FIRST_CLASS_NUMBER, known_class};
 use crate::section::header::handle_vars;
 
 /// An [`Error::Invalid`] with one error diagnostic.
-fn invalid(handle: Option<Handle>, message: impl Into<String>) -> Error {
+pub(super) fn invalid(handle: Option<Handle>, message: impl Into<String>) -> Error {
     Error::Invalid(vec![Diagnostic {
         severity: Severity::Error,
         handle,
@@ -101,6 +101,20 @@ pub(super) fn next_handles(
             ),
         )),
     }
+}
+
+/// An object built and checked to be added, as the adding method it is
+/// built for checks it, and not added (see [`Drawing::new_table_entry`],
+/// [`Drawing::new_dictionary_entry`]).
+pub(super) struct NewObject {
+    /// The object, under its new handle.
+    pub(super) obj: Object,
+    /// `$HANDSEED` past its handle.
+    pub(super) seed: Handle,
+    /// The table control or dictionary to list it.
+    pub(super) list: Handle,
+    /// The classes the drawing lacks for it.
+    pub(super) classes: Vec<DxfClass>,
 }
 
 /// Whether `obj` owns a list R2000 stores as a first/last pair that was not
@@ -536,7 +550,7 @@ impl Drawing {
     /// The entries of dictionary (with or without default) `dictionary`
     /// named `name` (compared without case), in list order, from the name
     /// index; none when it is not a dictionary.
-    fn dictionary_named(&self, dictionary: Handle, name: &str) -> Vec<Handle> {
+    pub(super) fn dictionary_named(&self, dictionary: Handle, name: &str) -> Vec<Handle> {
         let Some(d) = self.objects.get(&dictionary).and_then(Object::dictionary) else {
             return Vec::new();
         };
@@ -755,6 +769,14 @@ impl Drawing {
     /// [`Error::Invalid`].
     pub fn alloc_handle(&mut self) -> Result<Handle> {
         Ok(self.alloc_handles(1)?[0])
+    }
+
+    /// The handle [`Drawing::alloc_handle`] gives next, and the seed after
+    /// it, without allocating it.
+    pub(super) fn next_handle(&self) -> Result<(Handle, Handle)> {
+        let last = self.objects.last_key_value().map(|(&h, _)| h);
+        let (handles, seed) = next_handles(self.header.handseed, last, 1)?;
+        Ok((handles[0], seed))
     }
 
     /// Allocate `n` consecutive handles (see [`Drawing::alloc_handle`]); on
@@ -1341,6 +1363,37 @@ impl Drawing {
         kind: TableKind,
         object: NonGraphical,
     ) -> Result<Handle> {
+        self.sync_index();
+        let new = self.new_table_entry(kind, object, || self.next_handle())?;
+        let (h, control) = (new.obj.handle(), new.list);
+        let name = match &new.obj {
+            Object::Other { object, .. } => object.table_entry().map(|e| fold_name(&e.name)),
+            Object::Entity { .. } => None,
+        };
+        self.header.handseed = new.seed;
+        self.objects.insert(h, new.obj);
+        if let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = self.objects.get_mut(&control)
+        {
+            c.entries.push(h);
+        }
+        let state = self.ref_index.get_mut();
+        state.added(&self.objects, &[h], &[(control, h, SOFT_OWNER)]);
+        state.name_added(control, name.unwrap_or_default(), h, true);
+        Ok(h)
+    }
+
+    /// The entry `object` of the table of `kind`, owned by its control,
+    /// under the handle `alloc` gives (with the seed after it), checked as
+    /// [`Drawing::add_table_entry`] adds it: the drawing does not change.
+    pub(super) fn new_table_entry(
+        &self,
+        kind: TableKind,
+        object: NonGraphical,
+        alloc: impl FnOnce() -> Result<(Handle, Handle)>,
+    ) -> Result<NewObject> {
         let Some((control, _)) = self.table_control(kind) else {
             return Err(invalid(
                 None,
@@ -1353,9 +1406,7 @@ impl Drawing {
             .unwrap_or_default();
         let unnamed_shape = matches!(&object, NonGraphical::TextStyle(s) if s.shape_file);
         self.check_new_name(kind, &name, unnamed_shape)?;
-        self.sync_index();
-        let seed = self.header.handseed;
-        let h = self.alloc_handle()?;
+        let (h, seed) = alloc()?;
         let obj = Object::Other {
             common: ObjectCommon {
                 handle: h,
@@ -1364,22 +1415,13 @@ impl Drawing {
             },
             object,
         };
-        if let Err(e) = self.check_new(&obj, &[h]) {
-            self.header.handseed = seed;
-            return Err(e);
-        }
-        self.objects.insert(h, obj);
-        if let Some(Object::Other {
-            object: NonGraphical::TableControl(c),
-            ..
-        }) = self.objects.get_mut(&control)
-        {
-            c.entries.push(h);
-        }
-        let state = self.ref_index.get_mut();
-        state.added(&self.objects, &[h], &[(control, h, SOFT_OWNER)]);
-        state.name_added(control, fold_name(&name), h, true);
-        Ok(h)
+        self.check_new(&obj, &[h])?;
+        Ok(NewObject {
+            obj,
+            seed,
+            list: control,
+            classes: Vec::new(),
+        })
     }
 
     /// A new entry's name must not be empty (an unnamed shape file excepted)
@@ -1430,6 +1472,36 @@ impl Drawing {
         name: &str,
         object: NonGraphical,
     ) -> Result<Handle> {
+        self.sync_index();
+        let new = self.new_dictionary_entry(dictionary, name, object, || self.next_handle())?;
+        let h = new.obj.handle();
+        self.header.handseed = new.seed;
+        self.objects.insert(h, new.obj);
+        self.classes.extend(new.classes);
+        if let Some(d) = self
+            .objects
+            .get_mut(&dictionary)
+            .and_then(Object::dictionary_mut)
+        {
+            d.entries.push((name.to_owned(), h));
+        }
+        let state = self.ref_index.get_mut();
+        state.added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
+        state.name_added(dictionary, fold_name(name), h, false);
+        Ok(h)
+    }
+
+    /// The entry `name` of `dictionary`, owned by it and naming it among
+    /// its reactors, under the handle `alloc` gives (with the seed after
+    /// it), and the classes the drawing lacks for it, checked as
+    /// [`Drawing::add_object`] adds it: the drawing does not change.
+    pub(super) fn new_dictionary_entry(
+        &self,
+        dictionary: Handle,
+        name: &str,
+        object: NonGraphical,
+        alloc: impl FnOnce() -> Result<(Handle, Handle)>,
+    ) -> Result<NewObject> {
         match self.objects.get(&dictionary) {
             None => return Err(Error::NotFound(dictionary)),
             Some(o) if o.dictionary().is_some() => {}
@@ -1454,11 +1526,7 @@ impl Drawing {
             | NonGraphical::SpatialIndex(_)
             | NonGraphical::LayerIndex(_)
             | NonGraphical::ImageDefReactor(_) => true,
-            NonGraphical::Dictionary(d)
-            | NonGraphical::DictionaryWithDefault(DictionaryWithDefault {
-                dictionary: d, ..
-            }) => !d.entries.is_empty(),
-            _ => false,
+            o => o.dictionary().is_some_and(|d| !d.entries.is_empty()),
         };
         if refused {
             return Err(invalid(
@@ -1469,9 +1537,7 @@ impl Drawing {
                  entries: add an empty dictionary, then its entries",
             ));
         }
-        self.sync_index();
-        let seed = self.header.handseed;
-        let h = self.alloc_handle()?;
+        let (h, seed) = alloc()?;
         let obj = Object::Other {
             common: ObjectCommon {
                 handle: h,
@@ -1481,29 +1547,14 @@ impl Drawing {
             },
             object,
         };
-        let classes = self
-            .check_new(&obj, &[h])
-            .and_then(|()| self.missing_classes(std::slice::from_ref(&obj)));
-        let classes = match classes {
-            Ok(c) => c,
-            Err(e) => {
-                self.header.handseed = seed;
-                return Err(e);
-            }
-        };
-        self.objects.insert(h, obj);
-        self.classes.extend(classes);
-        if let Some(d) = self
-            .objects
-            .get_mut(&dictionary)
-            .and_then(Object::dictionary_mut)
-        {
-            d.entries.push((name.to_owned(), h));
-        }
-        let state = self.ref_index.get_mut();
-        state.added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
-        state.name_added(dictionary, fold_name(name), h, false);
-        Ok(h)
+        self.check_new(&obj, &[h])?;
+        let classes = self.missing_classes(std::slice::from_ref(&obj))?;
+        Ok(NewObject {
+            obj,
+            seed,
+            list: dictionary,
+            classes,
+        })
     }
 
     /// Add a layer to the layer table; see [`Drawing::add_entity`] for what
