@@ -605,16 +605,18 @@ fn write_reactors_xdict(w: &mut ObjWriter, c: &ObjectCommon) -> Result<()> {
 /// items, until a size of 0.
 fn read_xdata(r: &mut ObjReader) -> Result<Vec<XDataApp>> {
     let mut apps = Vec::new();
+    let mut doubts = TextDoubts::default();
     loop {
         // AutoCAD caps one application's data at 16 KiB; read the BS unsigned
         // so a large size is bounded by the data, not rejected as negative.
         let size = r.data.read_bs()? as u16;
         if size == 0 {
+            doubts.report("extended data string", r.handle, &mut r.diagnostics);
             return Ok(apps);
         }
         let app = Handle(r.data.read_handle_ref()?.value);
         let bytes = r.data.read_bytes(usize::from(size))?;
-        let items = parse_xdata_items(r, &bytes)?;
+        let items = parse_xdata_items(r, &bytes, &mut doubts)?;
         apps.push(XDataApp { app, items });
     }
 }
@@ -677,13 +679,17 @@ impl<'a> Bytes<'a> {
     }
 }
 
-fn parse_xdata_items(r: &mut ObjReader, bytes: &[u8]) -> Result<Vec<XDataItem>> {
+fn parse_xdata_items(
+    r: &mut ObjReader,
+    bytes: &[u8],
+    doubts: &mut TextDoubts,
+) -> Result<Vec<XDataItem>> {
     let mut b = Bytes(bytes);
     let mut items = Vec::new();
     while !b.0.is_empty() {
         let code = b.u8()?;
         items.push(match code {
-            0 => XDataItem::String(read_xdata_string(r, &mut b)?),
+            0 => XDataItem::String(read_xdata_string(r, &mut b, doubts)?),
             2 => match b.u8()? {
                 0 => XDataItem::ControlBrace(true),
                 1 => XDataItem::ControlBrace(false),
@@ -724,36 +730,23 @@ fn parse_xdata_items(r: &mut ObjReader, bytes: &[u8]) -> Result<Vec<XDataItem>> 
 /// Trailing NULs are removed, as for object text: AutoCAD writes none (an R2018
 /// sample stores "Arial" with length 5), but other writers (ACadSharp) count a
 /// terminator in the length. The encoder writes none.
-fn read_xdata_string(r: &mut ObjReader, b: &mut Bytes) -> Result<String> {
+fn read_xdata_string(r: &mut ObjReader, b: &mut Bytes, doubts: &mut TextDoubts) -> Result<String> {
     let mut text = if r.version >= Version::R2007 {
         let n = usize::from(b.u16()?);
         let raw = b.take(n.checked_mul(2).ok_or_else(|| corrupt("xdata string"))?)?;
         let (text, replaced) = strings::decode_utf16le_checked(raw);
         if replaced {
-            r.diagnostics
-                .push(lossy_diag(r.handle, "an unpaired UTF-16 surrogate"));
+            doubts.insert(TextDoubt::Surrogate);
         }
         text
     } else {
         let n = usize::from(b.u16()?);
         let stored = u16::from(b.u8()?);
         let bytes = b.take(n)?;
-        let (codepage, doubt) = text_item_codepage(stored, r.codepage, bytes);
-        if let Some(doubt) = doubt {
-            let message = format!("extended data string {doubt}");
-            // Once per object, not per string.
-            if !r.diagnostics.iter().any(|d| d.message == message) {
-                r.diagnostics.push(Diagnostic {
-                    severity: Severity::Warning,
-                    handle: Some(r.handle),
-                    message,
-                });
-            }
-        }
+        let codepage = doubts.codepage(stored, r.codepage, bytes);
         let (text, malformed) = strings::decode_checked(codepage, bytes);
         if malformed {
-            r.diagnostics
-                .push(lossy_diag(r.handle, "malformed code page bytes"));
+            doubts.insert(TextDoubt::Malformed);
         }
         text
     };
@@ -761,43 +754,104 @@ fn read_xdata_string(r: &mut ObjReader, b: &mut Bytes) -> Result<String> {
     Ok(text)
 }
 
-/// The code page a pre-R2007 text item (an extended data string, an
-/// XRECORD text) stored with code page byte `stored` is read in, in a
-/// drawing of code page `drawing`, and what is doubtful about it, if
-/// anything (for a warning: "... code page N is not supported; ...").
-///
-/// Code page 0 is no code page index (`$DWGCODEPAGE` numbers them from 1).
-/// AutoCAD stores the drawing's code page; the ODA SDK (`cc-15`, `cc-21`)
-/// and the writer of civilcraft's R2000 fixtures (`cc-02`, `cc-04`, ...)
-/// store 0 instead: in the corpus, 27,349 XRECORD texts and 382 extended
-/// data strings in 9 files whose drawings are code page 30, every one
-/// ASCII, while every other item names its drawing's code page (29, 30
-/// or 39). Text stored with 0 is read in the drawing's code page; ASCII
-/// text reads the same in every code page the files use, so it is not
-/// doubtful, but text with other bytes is (no file shows what such a
-/// writer means by 0).
-pub(crate) fn text_item_codepage(stored: u16, drawing: u16, bytes: &[u8]) -> (u16, Option<String>) {
-    let codepage = if stored == 0 { drawing } else { stored };
-    let doubt = if !strings::is_supported(codepage) {
-        Some(format!(
-            "code page {codepage} is not supported; read as Windows-1252"
-        ))
-    } else if stored == 0 && !bytes.is_ascii() {
-        Some(format!(
-            "with code page 0 has non-ASCII bytes; read in the drawing's code page \
-             {codepage}"
-        ))
-    } else {
-        None
-    };
-    (codepage, doubt)
+/// Something doubtful about an object's text items (its extended data
+/// strings, an XRECORD's texts), warned about once per object however many
+/// items share it (see [`TextDoubts`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TextDoubt {
+    /// The code page is not supported; read as Windows-1252.
+    Unsupported(u16),
+    /// Code page 0 with non-ASCII bytes, read in the drawing's code page.
+    ZeroNonAscii(u16),
+    /// Code page 0 in a drawing whose code page is not ASCII-compatible
+    /// (UTF-16, 43); read as Windows-1252.
+    ZeroNotAsciiCompatible(u16),
+    /// Malformed code page bytes became U+FFFD.
+    Malformed,
+    /// An unpaired UTF-16 surrogate became U+FFFD.
+    Surrogate,
 }
 
-fn lossy_diag(handle: Handle, what: &str) -> Diagnostic {
-    Diagnostic {
-        severity: Severity::Warning,
-        handle: Some(handle),
-        message: format!("extended data string has {what}; it became U+FFFD"),
+/// The distinct doubts about one object's text items. A set, not a scan of
+/// the diagnostics per item: there are at most a few hundred distinct
+/// doubts (one per code page), however many items a hostile object holds,
+/// and each becomes one warning.
+#[derive(Debug, Default)]
+pub(crate) struct TextDoubts(std::collections::BTreeSet<TextDoubt>);
+
+#[cfg(test)]
+thread_local! {
+    /// How many doubts were noted (each a set insert), for work tests.
+    pub(crate) static DOUBTS_NOTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl TextDoubts {
+    pub(crate) fn insert(&mut self, doubt: TextDoubt) {
+        #[cfg(test)]
+        DOUBTS_NOTED.with(|n| n.set(n.get() + 1));
+        self.0.insert(doubt);
+    }
+
+    /// The code page a pre-R2007 text item with code page byte `stored`,
+    /// in a drawing of code page `drawing`, is read in, noting what is
+    /// doubtful about it, if anything.
+    ///
+    /// Code page 0 is no code page index (`$DWGCODEPAGE` numbers them from
+    /// 1). AutoCAD stores the drawing's code page; the ODA SDK (`cc-15`,
+    /// `cc-21`) and the writer of civilcraft's R2000 fixtures (`cc-02`,
+    /// `cc-04`, ...) store 0 instead: in the corpus, 27,349 XRECORD texts
+    /// and 382 extended data strings in 9 files whose drawings are code page
+    /// 30, every one ASCII, while every other item names its drawing's code
+    /// page (29, 30 or 39). Text stored with 0 is read in the drawing's code
+    /// page; ASCII text reads the same in every code page the files use, so
+    /// it is not doubtful, but text with other bytes is (no file shows what
+    /// such a writer means by 0). A drawing code page that is not
+    /// ASCII-compatible (UTF-16) would turn even ASCII into other
+    /// characters, so 0 then reads as Windows-1252, with a warning.
+    pub(crate) fn codepage(&mut self, stored: u16, drawing: u16, bytes: &[u8]) -> u16 {
+        let ascii_compatible =
+            strings::encoding_for(drawing).is_none_or(|e| e.is_ascii_compatible());
+        let codepage = match stored {
+            0 if !ascii_compatible => {
+                self.insert(TextDoubt::ZeroNotAsciiCompatible(drawing));
+                return strings::DEFAULT_CODEPAGE;
+            }
+            0 => drawing,
+            _ => stored,
+        };
+        if !strings::is_supported(codepage) {
+            self.insert(TextDoubt::Unsupported(codepage));
+        } else if stored == 0 && !bytes.is_ascii() {
+            self.insert(TextDoubt::ZeroNonAscii(codepage));
+        }
+        codepage
+    }
+
+    /// One warning per doubt about `subject` ("extended data string").
+    pub(crate) fn report(self, subject: &str, handle: Handle, diagnostics: &mut Vec<Diagnostic>) {
+        diagnostics.extend(self.0.into_iter().map(|doubt| Diagnostic {
+            severity: Severity::Warning,
+            handle: Some(handle),
+            message: match doubt {
+                TextDoubt::Unsupported(cp) => {
+                    format!("{subject} code page {cp} is not supported; read as Windows-1252")
+                }
+                TextDoubt::ZeroNonAscii(cp) => format!(
+                    "{subject} with code page 0 has non-ASCII bytes; read in the drawing's \
+                     code page {cp}"
+                ),
+                TextDoubt::ZeroNotAsciiCompatible(cp) => format!(
+                    "{subject} with code page 0 read as Windows-1252: the drawing's code \
+                     page {cp} is not ASCII-compatible"
+                ),
+                TextDoubt::Malformed => {
+                    format!("{subject} has malformed code page bytes; it became U+FFFD")
+                }
+                TextDoubt::Surrogate => {
+                    format!("{subject} has an unpaired UTF-16 surrogate; it became U+FFFD")
+                }
+            },
+        }));
     }
 }
 
@@ -1290,20 +1344,23 @@ mod tests {
             value: 0x50,
         })
         .unwrap();
-        let mut data = Vec::new();
-        for &(cp, bytes) in items {
-            data.push(0);
-            data.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
-            data.push(cp);
-            data.extend_from_slice(bytes);
+        // Applications of at most 10,000 strings, so each fits its size.
+        for app in items.chunks(10_000) {
+            let mut data = Vec::new();
+            for &(cp, bytes) in app {
+                data.push(0);
+                data.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+                data.push(cp);
+                data.extend_from_slice(bytes);
+            }
+            d.write_bs(u16::try_from(data.len()).unwrap() as i16);
+            d.write_handle_ref(HandleRef {
+                code: 5,
+                value: 0x12,
+            })
+            .unwrap();
+            d.write_bytes(&data);
         }
-        d.write_bs(data.len() as i16);
-        d.write_handle_ref(HandleRef {
-            code: 5,
-            value: 0x12,
-        })
-        .unwrap();
-        d.write_bytes(&data);
         d.write_bs(0);
         d.write_bl(0); // reactors
         d.write_b(true); // no xdict
@@ -1314,9 +1371,10 @@ mod tests {
         let (mut r, _) = ObjReader::split(&bytes, Version::R2004, drawing).unwrap();
         let c = decode_object_common(&mut r).unwrap();
         assert!(r.diagnostics.iter().all(|x| x.handle == Some(Handle(0x50))));
-        let strings = c.xdata[0]
-            .items
+        let strings = c
+            .xdata
             .iter()
+            .flat_map(|app| &app.items)
             .map(|i| match i {
                 XDataItem::String(s) => s.clone(),
                 i => panic!("{i:?}"),
@@ -1338,7 +1396,7 @@ mod tests {
         assert!(warnings[0].contains("code page 11 is not supported"));
     }
 
-    /// Code page 0 (the ODA SDK's, see `text_item_codepage`) is the
+    /// Code page 0 (the ODA SDK's, see `TextDoubts::codepage`) is the
     /// drawing's: ASCII strings read without a warning; others read in the
     /// drawing's code page, with one warning per object.
     #[test]
@@ -1350,6 +1408,44 @@ mod tests {
         assert_eq!(strings, ["あ", "あ"]);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("code page 0") && warnings[0].contains("38"));
+        // A UTF-16 drawing (43) would read ASCII bytes as other characters.
+        let (strings, warnings) = xdata_strings(&[(0, b"hi"), (0, b"Data")], 43);
+        assert_eq!(strings, ["hi", "Data"]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("not ASCII-compatible"), "{warnings:?}");
+    }
+
+    /// Many doubtful strings in one object: a warning per distinct doubt,
+    /// not per string, found without rescanning the diagnostics (a scan per
+    /// string made 50,000 strings take 1.25 billion comparisons).
+    #[test]
+    fn hostile_xdata_doubts_once_per_object() {
+        // Code page 0 in a Shift-JIS drawing; 0xA0 is no Shift-JIS byte.
+        let items = vec![(0, &[0xA0u8][..]); 50_000];
+        let (strings, warnings) = xdata_strings(&items, 38);
+        assert_eq!(strings.len(), 50_000);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "{:?}",
+            &warnings[..warnings.len().min(3)]
+        );
+        assert!(warnings.iter().any(|w| w.contains("code page 0")));
+        assert!(warnings.iter().any(|w| w.contains("malformed")));
+        // A doubt first seen after many other warnings.
+        let mut items = vec![(38, &[0xA0u8][..]); 25_000];
+        items.extend(vec![(11, &b"A"[..]); 25_000]);
+        DOUBTS_NOTED.with(|n| n.set(0));
+        let (_, warnings) = xdata_strings(&items, 30);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "{:?}",
+            &warnings[..warnings.len().min(3)]
+        );
+        // One set insert per doubtful string; the old scan compared each
+        // of the last 25,000 against the 25,000 warnings before it.
+        assert_eq!(DOUBTS_NOTED.with(|n| n.get()), 50_000);
     }
 
     // ---- hostile input ----

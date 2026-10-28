@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::error::encode_error as encode_err;
 use crate::handle::{Handle, HandleRef};
-use crate::object::common::{AsRead, text_item_codepage};
+use crate::object::common::{AsRead, TextDoubt, TextDoubts};
 use crate::object::entities::dim::{check_fits, count, write_count};
 use crate::object::raw::{HandleTail, trailing_refs};
 use crate::object::stream::{ObjReader, ObjWriter};
@@ -178,15 +178,14 @@ struct ItemReader<'a> {
     pos: usize,
     version: Version,
     /// The drawing's code page, which pre-R2007 text stored with code page 0
-    /// is read in (see [`text_item_codepage`]).
+    /// is read in (see [`TextDoubts::codepage`]).
     codepage: u16,
-    /// What is doubtful about the first pre-R2007 text whose code page is
-    /// (see [`text_item_codepage`]).
-    doubt: Option<String>,
+    /// What is doubtful about the texts read so far, each kind once.
+    doubts: TextDoubts,
 }
 
-impl ItemReader<'_> {
-    fn take(&mut self, n: usize) -> Option<&[u8]> {
+impl<'a> ItemReader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         let s = self.bytes.get(self.pos..self.pos.checked_add(n)?)?;
         self.pos += n;
         Some(s)
@@ -200,41 +199,39 @@ impl ItemReader<'_> {
         self.array().map(f64::from_le_bytes)
     }
 
-    /// A text value, and whether it decoded lossily: `Err` with the bytes
-    /// for R2007+ text that is not UTF-16 (a lone surrogate), kept as
-    /// [`XRecordValue::RawText`]: unlike older text, which converts to
-    /// R2018 anyway, it can be written back unchanged.
-    fn text(&mut self) -> Option<std::result::Result<(String, bool), Vec<u8>>> {
+    /// A text value: `Err` with the bytes for R2007+ text that is not
+    /// UTF-16 (a lone surrogate), kept as [`XRecordValue::RawText`]: unlike
+    /// older text, which converts to R2018 anyway (malformed bytes noted as
+    /// a doubt), it can be written back unchanged.
+    fn text(&mut self) -> Option<std::result::Result<String, Vec<u8>>> {
         let n = usize::from(u16::from_le_bytes(self.array()?));
         if self.version >= Version::R2007 {
             let bytes = self.take(n.checked_mul(2)?)?;
             Some(match strings::decode_utf16le_checked(bytes) {
                 (_, true) => Err(bytes.to_vec()),
-                text => Ok(text),
+                (text, false) => Ok(text),
             })
         } else {
             let stored = u16::from(self.array::<1>()?[0]);
-            let drawing = self.codepage;
             let bytes = self.take(n)?;
-            let (codepage, doubt) = text_item_codepage(stored, drawing, bytes);
-            let text = strings::decode_checked(codepage, bytes);
-            if self.doubt.is_none() {
-                self.doubt = doubt;
+            let codepage = self.doubts.codepage(stored, self.codepage, bytes);
+            let (text, malformed) = strings::decode_checked(codepage, bytes);
+            if malformed {
+                self.doubts.insert(TextDoubt::Malformed);
             }
             Some(Ok(text))
         }
     }
 
-    /// One value of type `t`, and whether it decoded lossily; `None` when
-    /// the bytes do not hold one.
-    fn value(&mut self, t: GroupCodeType) -> Option<(XRecordValue, bool)> {
+    /// One value of type `t`; `None` when the bytes do not hold one.
+    fn value(&mut self, t: GroupCodeType) -> Option<XRecordValue> {
         use GroupCodeType as T;
         let v = match t {
             T::Text | T::HandleText => {
                 return Some(match self.text()? {
-                    Ok((s, lossy)) if t == T::Text => (XRecordValue::Text(s), lossy),
-                    Ok((s, lossy)) => (XRecordValue::HandleText(s), lossy),
-                    Err(bytes) => (XRecordValue::RawText(bytes), false),
+                    Ok(s) if t == T::Text => XRecordValue::Text(s),
+                    Ok(s) => XRecordValue::HandleText(s),
+                    Err(bytes) => XRecordValue::RawText(bytes),
                 });
             }
             T::Point => XRecordValue::Point([self.f64()?, self.f64()?, self.f64()?]),
@@ -254,50 +251,45 @@ impl ItemReader<'_> {
             }
             T::ObjectId => XRecordValue::ObjectId(Handle(u64::from_le_bytes(self.array()?))),
         };
-        Some((v, false))
+        Some(v)
     }
 }
 
 /// Parse extended record data bytes into items. An item that cannot be read
 /// as its type, or of a code with no type, ends the list as
 /// [`XRecordValue::Unknown`] with the rest of the bytes from the item's
-/// start. Returns the items, whether a text decoded lossily, and what is
-/// doubtful about the first pre-R2007 text whose code page is (see
-/// [`text_item_codepage`]). `codepage` is the drawing's.
+/// start. Returns the items and what is doubtful about their texts.
+/// `codepage` is the drawing's.
 fn parse_items(
     bytes: &[u8],
     version: Version,
     codepage: u16,
-) -> (Vec<(i16, XRecordValue)>, bool, Option<String>) {
+) -> (Vec<(i16, XRecordValue)>, TextDoubts) {
     let mut r = ItemReader {
         bytes,
         pos: 0,
         version,
         codepage,
-        doubt: None,
+        doubts: TextDoubts::default(),
     };
     let mut items = Vec::new();
-    let mut lossy = false;
     while r.pos < bytes.len() {
         let start = r.pos;
         let Some(code) = r.array().map(i16::from_le_bytes) else {
             // A single trailing byte: no room for a group code.
             items.push((0, XRecordValue::Unknown(bytes[start..].to_vec())));
-            return (items, lossy, r.doubt);
+            break;
         };
         match group_code_type(code).and_then(|t| r.value(t)) {
-            Some((v, l)) => {
-                lossy |= l;
-                items.push((code, v));
-            }
+            Some(v) => items.push((code, v)),
             None => {
                 let rest = bytes.get(start..).unwrap_or_default().to_vec();
                 items.push((code, XRecordValue::Unknown(rest)));
-                return (items, lossy, r.doubt);
+                break;
             }
         }
     }
-    (items, lossy, r.doubt)
+    (items, r.doubts)
 }
 
 /// Write extended record items as R2018 data bytes.
@@ -388,22 +380,9 @@ impl XRecord {
         let n = count(r.data.read_bl()?, "extended record byte")?;
         check_fits(r, n, 8, "extended record data")?;
         let bytes = r.data.read_bytes(n)?;
-        let (items, lossy, doubt) = parse_items(&bytes, r.version, r.codepage);
-        if lossy {
-            r.diagnostics.push(crate::diag::Diagnostic {
-                severity: crate::diag::Severity::Warning,
-                handle: Some(r.handle),
-                message: "extended record text is malformed; it became U+FFFD".into(),
-            });
-        }
-        // Once per record, as for extended data strings.
-        if let Some(doubt) = doubt {
-            r.diagnostics.push(crate::diag::Diagnostic {
-                severity: crate::diag::Severity::Warning,
-                handle: Some(r.handle),
-                message: format!("extended record text {doubt}"),
-            });
-        }
+        let (items, doubts) = parse_items(&bytes, r.version, r.codepage);
+        // Once per record and doubt, as for extended data strings.
+        doubts.report("extended record text", r.handle, &mut r.diagnostics);
         let cloning = r.data.read_bs()?;
         let (object_ids, handle_tail) = trailing_refs(r)?;
         Ok(XRecord {
@@ -663,8 +642,10 @@ pub(crate) mod tests {
             ),
         ];
         for (bytes, want) in cases {
-            let (items, lossy, unsupported) = parse_items(bytes, v, 30);
-            assert!(!lossy && unsupported.is_none());
+            let (items, doubts) = parse_items(bytes, v, 30);
+            let mut warnings = Vec::new();
+            doubts.report("text", H, &mut warnings);
+            assert!(warnings.is_empty(), "{warnings:?}");
             assert_eq!(items, want, "{bytes:02X?}");
             assert_eq!(items_bytes(&items).unwrap(), bytes, "{bytes:02X?}");
         }
@@ -771,6 +752,20 @@ pub(crate) mod tests {
         assert_eq!(texts, ["hi", "hi"]);
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert!(messages[0].contains("code page 11 is not supported"));
+        // Each distinct doubt is reported, not only the first: a later
+        // unsupported code page and malformed bytes, after code page 0.
+        let bad: &[u8] = &[0x01, 0x00, 0x01, 0x00, 38, 0xA0]; // no Shift-JIS byte
+        let (_, messages) = decode(&[a, dos, bad, a, dos, bad], 38);
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert!(messages.iter().any(|m| m.contains("code page 0")));
+        assert!(messages.iter().any(|m| m.contains("code page 11")));
+        assert!(messages.iter().any(|m| m.contains("malformed")));
+        // Code page 0 in a UTF-16 drawing (43) reads as Windows-1252, not
+        // as UTF-16 units, with a warning even for ASCII.
+        let (texts, messages) = decode(&[hi, hi], 43);
+        assert_eq!(texts, ["hi", "hi"]);
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("not ASCII-compatible"), "{messages:?}");
         // The data length is checked before allocating.
         let mut d = BitWriter::new();
         d.write_bl(i32::MAX);
