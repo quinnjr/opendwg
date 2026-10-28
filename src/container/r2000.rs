@@ -153,9 +153,9 @@ pub(super) fn read(bytes: &[u8]) -> Result<RawSections> {
 
     sections.insert(SectionName::Handles, required(2, "object map")?.to_vec());
 
-    // Optional sections (Template, AuxHeader, Preview): absent ones (size or seeker 0: offset 0
-    // is the file header itself) are skipped; present ones that are out of range (or a preview without its sentinels) are
-    // skipped with a warning.
+    // Optional sections (Template, AuxHeader, Preview): absent ones (size or seeker 0: offset
+    // 0 is the file header itself) are skipped; present ones that are out of range (or a
+    // preview without its sentinels) are skipped with a warning.
     // Locator record 4 is stored as `Template`: ODS 3.2.6 says it holds only the MEASUREMENT
     // variable, which ODS places in the AcDb:Template section (chapter 22).
     let mut warnings = Vec::new();

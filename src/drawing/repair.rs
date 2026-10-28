@@ -139,6 +139,16 @@ impl Drawing {
                 )));
             }
         }
+        // The write's refresh passes that enumerate the drawing's objects
+        // do not see the added ones (see `Drawing::refreshed`): only kinds
+        // none of them would change are added.
+        debug_assert!(r.added.iter().all(|h| matches!(
+            r.objects.get(h),
+            Some(Object::Other {
+                object: NonGraphical::DimStyle(_) | NonGraphical::Dictionary(_),
+                ..
+            })
+        )));
         (!r.warnings.is_empty()).then_some(r)
     }
 
@@ -409,10 +419,37 @@ mod tests {
         }
     }
 
+    /// `d` with a `$HANDSEED` below its largest handle (a damaged file):
+    /// the additions take the handles past it.
+    fn stale_seed(mut d: Drawing) -> Drawing {
+        d.header.handseed = Handle(1);
+        d
+    }
+
+    /// `d` with an object at the largest handle: no handle is left for the
+    /// additions, which are not made.
+    fn used_up(mut d: Drawing) -> Drawing {
+        let common = ObjectCommon {
+            handle: Handle(u64::MAX),
+            ..ObjectCommon::new()
+        };
+        d.objects.insert(
+            Handle(u64::MAX),
+            Object::Other {
+                common,
+                object: NonGraphical::Placeholder,
+            },
+        );
+        d.ref_index = Default::default();
+        d
+    }
+
     /// Drawings lacking each required object, all of them, or with a named
-    /// object dictionary out of byte order or with a default, are written,
-    /// validated and warned about as the repaired copy is; so is every
-    /// corpus drawing that needs a repair.
+    /// object dictionary out of byte order or with a default, with a stale
+    /// seed or with the handles used up, are written, validated and warned
+    /// about as the repaired copy is; so is every corpus drawing that needs
+    /// a repair, and those with unconvertible objects once they are
+    /// removed.
     #[test]
     fn repair_overlay_matches_the_repaired_copy() {
         let strip = |dims: bool, names: &[&str], sorted: bool, default: bool| {
@@ -468,6 +505,9 @@ mod tests {
             strip(true, &both, false, false),
             strip(false, &both, true, true),
             Drawing::new(),
+            stale_seed(strip(true, &both, true, false)),
+            used_up(strip(true, &both, true, false)),
+            used_up(strip(false, &["ACAD_GROUP"], true, false)),
         ]
         .iter()
         .enumerate()
@@ -476,23 +516,49 @@ mod tests {
         }
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/files");
         let Ok(files) = std::fs::read_dir(&dir) else {
+            assert!(
+                std::env::var("OPENDWG_REQUIRE_CORPUS").as_deref() != Ok("1"),
+                "OPENDWG_REQUIRE_CORPUS=1 but there is no corpus"
+            );
+            eprintln!("SKIPPED: no corpus; run scripts/fetch-corpus.sh");
             return;
         };
-        let mut repaired = 0;
+        let (mut repaired, mut unconvertible) = (0, 0);
         for f in files.flatten() {
             let path = f.path();
             if path.extension().is_none_or(|x| x != "dwg") {
                 continue;
             }
-            let Ok(d) = Drawing::open(&path) else {
+            let Ok(mut d) = Drawing::open(&path) else {
                 continue;
             };
-            if d.repair().is_some() && d.unconvertible_objects().is_empty() {
-                assert_repair_as_copy(&d, &path.display().to_string());
-                repaired += 1;
+            if d.repair().is_none() {
+                continue;
+            }
+            let what = path.display().to_string();
+            // With unconvertible objects the write is refused, as it is for
+            // the copy; validation and the warnings still compare.
+            assert_repair_as_copy(&d, &what);
+            repaired += 1;
+            let gone: Vec<Handle> = d
+                .unconvertible_objects()
+                .into_iter()
+                .map(|(h, _)| h)
+                .collect();
+            if !gone.is_empty() {
+                d.remove_all(&gone)
+                    .unwrap_or_else(|e| panic!("{what}: removing the unconvertible objects: {e}"));
+                assert!(d.unconvertible_objects().is_empty(), "{what}");
+                assert_repair_as_copy(&d, &format!("{what}, unconvertible objects removed"));
+                unconvertible += 1;
             }
         }
-        eprintln!("{repaired} corpus drawings repaired");
+        // The corpus has 15 drawings that need a repair, 5 of them with
+        // objects the writer cannot convert.
+        assert!(
+            repaired >= 15 && unconvertible >= 5,
+            "{repaired} repaired, {unconvertible} unconvertible"
+        );
     }
 
     fn warned(d: &Drawing, what: &str) -> bool {

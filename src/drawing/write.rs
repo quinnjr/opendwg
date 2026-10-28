@@ -788,8 +788,14 @@ impl Drawing {
     /// documentation).
     pub(super) fn refreshed(&self, work: &mut WriteWork) -> Changes {
         let mut changes = Changes::default();
-        // The required objects the writer adds come first: the refreshes
-        // see them as they would see objects of the drawing.
+        // The required objects the writer adds come first. A refresh that
+        // edits an object starts from the overlay's copy (`Changes::edit`),
+        // and those that go through `Changes::handles` (data storage flags,
+        // validation) see the added objects; the passes that enumerate
+        // `self.objects` do not. That is enough for what is added today, a
+        // DIMSTYLE and empty dictionaries, which none of those passes would
+        // change (`repair` asserts it); an addition of another kind would
+        // need them to enumerate the added objects too.
         if let Some(repair) = self.repair() {
             changes.replaced = repair.objects;
             changes.added = repair.added;
