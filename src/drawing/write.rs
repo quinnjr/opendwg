@@ -52,8 +52,10 @@
 //!     storage record keyed by its handle, and it gets a GUID derived from
 //!     $FINGERPRINTGUID and its handle ([`AcisGuid::derived`]).
 //!   - an object listed as owned (an extension dictionary, an entry of a
-//!     hard-owner dictionary) that stores a null owner gets its lister as
-//!     owner, with a warning (AutoCAD 2002's R14 round-trip data);
+//!     hard-owner dictionary) by exactly one object, that stores a null
+//!     owner, gets its lister as owner, with a warning (AutoCAD 2002's R14
+//!     round-trip data); one that two objects list keeps its null owner,
+//!     and validation refuses it (which one owns it is not known);
 //!   - an entity exactly one block record lists, whose owner names another
 //!     object, gets that block as owner (and entity mode), with a warning;
 //!   - a VISUALSTYLE stored in a layout older than R2018's (read before
