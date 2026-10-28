@@ -24,6 +24,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 #[cfg(doc)]
 use super::Drawing;
+use crate::error::Result;
 use crate::handle::Handle;
 use crate::object::objects::{handle_text_is_reference, parse_handle_text};
 use crate::object::tables::{HARD_OWNER, HARD_POINTER, SOFT_OWNER, SOFT_POINTER};
@@ -40,6 +41,16 @@ use crate::object::{
 /// records are keyed by handle but are not references: the writer drops
 /// those of entities gone.
 pub(crate) fn object_refs(obj: &Object) -> (Vec<(Handle, u8)>, bool) {
+    let (refs, _, complete) = encoded_refs(obj);
+    (refs, complete)
+}
+
+/// The references of [`object_refs`], the encoders' first error (the
+/// type-specific data's, else an entity's common data's), and whether the
+/// list is complete: when neither encoder failed, or for a pre-R2013 ACIS
+/// entity when only its type data's encoder did (its one reference is added
+/// here). `Drawing::check_new` refuses an object on the error.
+pub(crate) fn encoded_refs(obj: &Object) -> (Vec<(Handle, u8)>, Result<()>, bool) {
     // An object whose common data could not be read refers to nothing the
     // drawing can know of; it is never written (see `UnreadableObject`).
     if let Object::Other {
@@ -47,10 +58,10 @@ pub(crate) fn object_refs(obj: &Object) -> (Vec<(Handle, u8)>, bool) {
         ..
     } = obj
     {
-        return (Vec::new(), true);
+        return (Vec::new(), Ok(()), true);
     }
-    let (mut refs, result) = type_refs(obj);
-    let mut complete = result.is_ok();
+    let (mut refs, mut encoded) = type_refs(obj);
+    let mut complete = encoded.is_ok();
     if let Object::Entity { common, entity } = obj {
         if let Entity::Acis(a) = entity {
             if !matches!(a.payload, AcisPayload::DataStorage { .. }) {
@@ -61,6 +72,10 @@ pub(crate) fn object_refs(obj: &Object) -> (Vec<(Handle, u8)>, bool) {
         let (common_refs, result) = entity_common_refs(common);
         refs.extend(common_refs);
         complete &= result.is_ok();
+        // The type data's error first; the common data's when it has none.
+        if encoded.is_ok() {
+            encoded = result;
+        }
     }
     if let Object::Other {
         object: NonGraphical::XRecord(x),
@@ -86,7 +101,7 @@ pub(crate) fn object_refs(obj: &Object) -> (Vec<(Handle, u8)>, bool) {
     }
     let own = obj.handle();
     refs.retain(|&(t, _)| t.0 != 0 && t != own);
-    (refs, complete)
+    (refs, encoded, complete)
 }
 
 /// The reference code a DXF group code's handle stands for: 330-339 soft
@@ -319,9 +334,11 @@ pub(crate) struct IndexState {
     pub(crate) names: HashMap<Handle, HashMap<String, Vec<Handle>>>,
     /// For each table entry indexed in `names`, the table controls it is
     /// indexed under (its name is in it, not in the control).
-    pub(crate) name_holders: HashMap<Handle, Vec<Handle>>,
+    pub(crate) name_holders: HashMap<Handle, BTreeSet<Handle>>,
     /// The number of lists scanned to fill `names`, for tests.
     pub(crate) name_scans: usize,
+    /// The new handles `Drawing::check_new` compared, for tests.
+    pub(crate) pending_probes: usize,
 }
 
 impl IndexState {
@@ -415,7 +432,7 @@ impl IndexState {
         if let Some(names) = self.names.get_mut(&list) {
             names.entry(folded).or_default().push(h);
             if table {
-                self.name_holders.entry(h).or_default().push(list);
+                self.name_holders.entry(h).or_default().insert(list);
             }
         }
     }

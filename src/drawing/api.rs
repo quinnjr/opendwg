@@ -36,7 +36,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::Drawing;
-use super::refs::{IndexState, RefIndex, object_refs};
+use super::refs::{IndexState, RefIndex, encoded_refs, object_refs};
 use crate::diag::{Diagnostic, Severity};
 use crate::error::{Error, Result};
 use crate::handle::Handle;
@@ -46,8 +46,7 @@ use crate::object::tables::{HARD_OWNER, SOFT_OWNER, SOFT_POINTER};
 use crate::object::{
     Attrib, Block, BlockRecord, DictionaryWithDefault, DimStyle, Entity, EntityCommon, EntityList,
     ImageDefReactor, Layer, Layout, Linetype, LinetypeRef, MInsert, NonGraphical, ObjWriter,
-    Object, ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, encode_entity_common,
-    encode_object_common, type_refs,
+    Object, ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, encode_object_common,
 };
 use crate::section::DxfClass;
 use crate::section::classes::{FIRST_CLASS_NUMBER, known_class};
@@ -572,7 +571,7 @@ impl Drawing {
             for (n, h) in entries() {
                 names.entry(fold_name(&n)).or_default().push(h);
                 if table {
-                    state.name_holders.entry(h).or_default().push(list);
+                    state.name_holders.entry(h).or_default().insert(list);
                 }
             }
             state.name_scans += 1;
@@ -799,6 +798,20 @@ impl Drawing {
     /// a multiline has as many lines as its style has elements (the kind
     /// checks of `validate()`).
     pub(super) fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
+        let probes = std::cell::Cell::new(0);
+        let result = self.check_new_counted(obj, pending, &probes);
+        self.ref_index.lock().pending_probes += probes.get();
+        result
+    }
+
+    /// [`Drawing::check_new`], counting in `probes` the handles of `pending`
+    /// compared.
+    fn check_new_counted(
+        &self,
+        obj: &Object,
+        pending: &[Handle],
+        probes: &std::cell::Cell<usize>,
+    ) -> Result<()> {
         let common = obj.object_common();
         if common.xdict.is_some() {
             return Err(invalid(
@@ -808,26 +821,30 @@ impl Drawing {
         }
         // A binary search: a family's new handles are many (a polyline's
         // vertices), and each makes several references.
-        let new = |h: Handle| pending.binary_search(&h).is_ok();
+        debug_assert!(
+            pending.windows(2).all(|w| w[0] < w[1]),
+            "new handles are given ascending"
+        );
+        let new = |h: Handle| {
+            pending
+                .binary_search_by(|p| {
+                    probes.set(probes.get() + 1);
+                    p.cmp(&h)
+                })
+                .is_ok()
+        };
         let exists = |h: Handle| self.objects.contains_key(&h) || new(h);
         if let Some(&r) = common.reactors.iter().find(|&&r| !exists(r)) {
             return Err(Error::NotFound(r));
         }
-        type_refs(obj).1?;
-        // The common data's encoder checks the extended data (no empty
-        // application, binary chunks of at most 255 bytes, at most 65535
-        // bytes per application, ...).
-        let mut w = ObjWriter::recording(common.handle);
-        match obj {
-            Object::Entity { common, .. } => encode_entity_common(&mut w, common)?,
-            Object::Other { common, .. } => encode_object_common(&mut w, common)?,
-        }
-        let (refs, complete) = object_refs(obj);
-        if !complete {
-            return Err(invalid(
-                Some(common.handle),
-                "the object's references cannot all be listed: it cannot be encoded as R2018",
-            ));
+        // The type data and an entity's common data are encoded once, for
+        // their references and errors; the common data's encoder checks the
+        // extended data (no empty application, binary chunks of at most 255
+        // bytes, at most 65535 bytes per application, ...).
+        let (refs, encoded, _) = encoded_refs(obj);
+        encoded?;
+        if let Object::Other { common, .. } = obj {
+            encode_object_common(&mut ObjWriter::recording(common.handle), common)?;
         }
         if let Some((t, _)) = refs.into_iter().find(|&(t, _)| !exists(t)) {
             return Err(Error::NotFound(t));
@@ -2183,7 +2200,7 @@ fn list_entries_only(obj: &Object, x: Handle) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::{Dictionary, Line, XDataItem};
+    use crate::object::{Dictionary, Line, XDataItem, type_refs};
     use crate::section::HeaderVars;
 
     fn drawing(objects: impl IntoIterator<Item = (u64, NonGraphical)>) -> Drawing {
@@ -2258,8 +2275,63 @@ mod tests {
         .unwrap()
     }
 
-    /// The index kept up to date equals one built afresh.
+    /// The name index kept up to date equals one built afresh: each list it
+    /// holds (a table control or dictionary) maps the names its entries have
+    /// now to those entries, in list order; each table entry indexed names
+    /// its control among its holders, and no entry has more holders than
+    /// there are tables.
+    fn assert_names_fresh(d: &Drawing) {
+        let state = d.ref_index.lock();
+        for (&list, kept) in &state.names {
+            let (entries, table): (Vec<(String, Handle)>, bool) = match d.objects.get(&list) {
+                Some(Object::Other {
+                    object: NonGraphical::TableControl(c),
+                    ..
+                }) => (
+                    d.table_handles(c.kind)
+                        .into_iter()
+                        .filter_map(|h| match d.objects.get(&h) {
+                            Some(Object::Other { object, .. }) => {
+                                Some((object.table_entry()?.name.clone(), h))
+                            }
+                            _ => None,
+                        })
+                        .collect(),
+                    true,
+                ),
+                Some(Object::Other {
+                    object: NonGraphical::Dictionary(x),
+                    ..
+                }) => (x.entries.clone(), false),
+                Some(Object::Other {
+                    object: NonGraphical::DictionaryWithDefault(x),
+                    ..
+                }) => (x.dictionary.entries.clone(), false),
+                _ => panic!("{list} is indexed by name but is no list"),
+            };
+            let mut fresh: HashMap<String, Vec<Handle>> = HashMap::new();
+            for (n, h) in &entries {
+                fresh.entry(fold_name(n)).or_default().push(*h);
+            }
+            assert_eq!(kept, &fresh, "the names of {list} are stale");
+            if table {
+                for (_, h) in &entries {
+                    assert!(
+                        state.name_holders.get(h).is_some_and(|c| c.contains(&list)),
+                        "{h} does not name {list} among its holders"
+                    );
+                }
+            }
+        }
+        for (h, holders) in &state.name_holders {
+            assert!(holders.len() <= TableKind::ALL.len(), "{h}: {holders:?}");
+        }
+    }
+
+    /// The index kept up to date equals one built afresh (the name index
+    /// too, see [`assert_names_fresh`]).
     fn assert_index_fresh(d: &Drawing) {
+        assert_names_fresh(d);
         let kept = d.ref_index.lock().ensure(&d.objects).snapshot();
         let mut fresh = IndexState::default();
         let fresh = fresh.ensure(&d.objects).snapshot();
@@ -2463,6 +2535,34 @@ mod tests {
         assert_index_fresh(&d);
     }
 
+    /// Renaming entries and looking names up in turn rescans the table each
+    /// time, but an entry left alone stays held by its one control: the
+    /// holders do not grow with the rescans.
+    #[test]
+    fn name_holders_stay_bounded_through_rescans() {
+        let mut d = Drawing::new();
+        let layers: Vec<Handle> = (0..50)
+            .map(|i| d.add_layer(Layer::new(&format!("L{i}"))).unwrap())
+            .collect();
+        let untouched = d.layer_by_name("0").unwrap();
+        let before = d.ref_index.lock().name_scans;
+        for (i, &h) in layers.iter().enumerate() {
+            d.layer_mut(h).unwrap().entry.name = format!("Renamed{i}");
+            assert_eq!(d.layer_by_name(&format!("renamed{i}")), Some(h));
+        }
+        let state = d.ref_index.lock();
+        assert_eq!(
+            state.name_scans - before,
+            layers.len(),
+            "a rescan per rename"
+        );
+        assert_eq!(state.name_holders[&untouched].len(), 1);
+        let total: usize = state.name_holders.values().map(BTreeSet::len).sum();
+        assert!(total <= d.objects.len(), "{total} holder entries");
+        drop(state);
+        assert_index_fresh(&d);
+    }
+
     /// Extended data that cannot be encoded as R2018 (an application with no
     /// items, a binary chunk over 255 bytes) is refused for a new entity
     /// and a new object, nothing changes, and removals still work (an
@@ -2527,45 +2627,45 @@ mod tests {
         assert!(d.get(kept).is_none());
     }
 
-    /// A polyline with 100k vertices is added in time linear in its
-    /// vertices: the check that each child's references are to existing or
-    /// new objects does not scan the new handles per reference.
+    /// Adding a polyline of n vertices compares O(n log n) new handles in
+    /// all, not O(n²): each child's references are looked up among the
+    /// family's new handles by binary search. From 1k to 10k vertices the
+    /// comparisons grow about 13 times (a scan of the new handles per
+    /// reference grows them 100 times).
     #[test]
     fn adding_a_long_polyline_is_linear() {
         use crate::object::{Polyline3d, Vertex3d};
-        let mut d = Drawing::new();
-        let ms = d.model_space();
-        let l0 = d.layer_by_name("0").unwrap();
-        let poly = Entity::Polyline3d(Polyline3d {
-            spline_flags: 0,
-            closed_flags: 0,
-            vertices: EntityList::Owned(Vec::new()),
-            seqend: Handle(0),
-        });
-        let n = 100_000;
-        let before = d.objects.len();
-        let vertices = (0..n)
-            .map(|i| {
-                let vertex = Vertex3d {
-                    flags: 32,
-                    point: [i as f64, 0.0, 0.0],
-                };
-                (EntityCommon::new(l0), Entity::Vertex3d(vertex))
-            })
-            .collect();
-        let start = std::time::Instant::now();
-        let h = d
-            .add_polyline(ms, (EntityCommon::new(l0), poly), vertices)
-            .unwrap();
-        let took = start.elapsed();
-        assert_eq!(d.objects.len(), before + n + 2);
-        assert!(d.get(h).is_some());
-        // Quadratic work (over 1e10 handle comparisons) took 1.9 s in
-        // release; linear work takes about 0.25 s.
-        let bound = if cfg!(debug_assertions) { 10 } else { 1 };
+        let probes = |n: usize| {
+            let mut d = Drawing::new();
+            let ms = d.model_space();
+            let l0 = d.layer_by_name("0").unwrap();
+            let poly = Entity::Polyline3d(Polyline3d {
+                spline_flags: 0,
+                closed_flags: 0,
+                vertices: EntityList::Owned(Vec::new()),
+                seqend: Handle(0),
+            });
+            let before = d.objects.len();
+            let vertices = (0..n)
+                .map(|i| {
+                    let vertex = Vertex3d {
+                        flags: 32,
+                        point: [i as f64, 0.0, 0.0],
+                    };
+                    (EntityCommon::new(l0), Entity::Vertex3d(vertex))
+                })
+                .collect();
+            let start = d.ref_index.lock().pending_probes;
+            d.add_polyline(ms, (EntityCommon::new(l0), poly), vertices)
+                .unwrap();
+            assert_eq!(d.objects.len(), before + n + 2);
+            d.ref_index.lock().pending_probes - start
+        };
+        let (small, large) = (probes(1_000), probes(10_000));
+        assert!(small > 0);
         assert!(
-            took < std::time::Duration::from_secs(bound),
-            "adding {n} vertices took {took:?}"
+            large < 20 * small,
+            "{small} comparisons for 1k vertices, {large} for 10k"
         );
     }
 
@@ -2741,7 +2841,7 @@ mod tests {
         let mut layers: Vec<Handle> = vec![l0];
         let (mut ok, mut refused) = (0, 0);
         // Successes per operation (arms 0 and 1 are one operation).
-        let mut done = [0usize; 12];
+        let mut done = [0usize; 13];
         d.referrers(ms);
         for step in 0..400 {
             let layer = rng.pick(&layers).unwrap_or(l0);
@@ -2759,7 +2859,7 @@ mod tests {
                     .map(|_| (EntityCommon::new(layer), attrib.clone()))
                     .collect::<Vec<_>>()
             };
-            let arm = rng.below(12);
+            let arm = rng.below(13);
             let result: Result<Handle> = match arm {
                 0 | 1 => {
                     let into = rng
@@ -2919,6 +3019,22 @@ mod tests {
                     Some(h) if d.objects.contains_key(&h) => d.remove(h).map(|_| h),
                     _ => continue,
                 },
+                12 => {
+                    // A layer renamed through layer_mut, then looked up by
+                    // its new name (without case) and by its old one.
+                    // Not layer 0, which the other operations look up.
+                    let Some(target) = rng.pick(&layers[1..]) else {
+                        continue;
+                    };
+                    let Some(l) = d.layer_mut(target) else {
+                        continue;
+                    };
+                    let old = std::mem::replace(&mut l.entry.name, format!("Renamed{step}"));
+                    assert_eq!(d.layer_by_name(&format!("RENAMED{step}")), Some(target));
+                    assert_ne!(d.layer_by_name(&old), Some(target));
+                    done[12] += 1;
+                    continue;
+                }
                 _ => {
                     let h = rng.pick(&originals).unwrap();
                     if !d.objects.contains_key(&h) {
