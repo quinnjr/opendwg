@@ -920,33 +920,45 @@ type EntityDecoder = fn(&mut ObjReader) -> Result<Entity>;
 /// A typed decoder of a class type's non-graphical objects.
 type ObjectDecoder = fn(&mut ObjReader) -> Result<NonGraphical>;
 
+/// The HATCH decoder, for both its keys (see [`typed_entity`]).
+fn decode_hatch(r: &mut ObjReader) -> Result<Entity> {
+    Hatch::decode(r).map(|h| Entity::Hatch(Box::new(h)))
+}
+
+/// The OLE2FRAME decoder, for both its keys (see [`typed_entity`]).
+fn decode_ole2frame(r: &mut ObjReader) -> Result<Entity> {
+    Ole2Frame::decode(r).map(|o| Entity::Ole2Frame(Box::new(o)))
+}
+
+/// The ACAD_PROXY_ENTITY decoder, for both its keys (see [`typed_entity`]).
+fn decode_proxy_entity(r: &mut ObjReader) -> Result<Entity> {
+    ProxyEntity::decode(r).map(|p| Entity::ProxyEntity(Box::new(p)))
+}
+
+/// The LWPOLYLINE decoder, for both its keys (see [`typed_entity`]).
+fn decode_lwpolyline(r: &mut ObjReader) -> Result<Entity> {
+    LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)))
+}
+
 /// The class types [`typed_entity`] decodes, by DXF name, sorted (for the
 /// binary search): the one list both it and [`is_modeled`] read.
 const ENTITY_CLASSES: [(&str, EntityDecoder); 9] = [
-    ("ACAD_PROXY_ENTITY", |r| {
-        ProxyEntity::decode(r).map(|p| Entity::ProxyEntity(Box::new(p)))
-    }),
+    ("ACAD_PROXY_ENTITY", decode_proxy_entity),
     ("ARC_DIMENSION", |r| {
         Dimension::decode(r, DimType::ArcLength).map(|d| Entity::Dimension(Box::new(d)))
     }),
-    ("HATCH", |r| {
-        Hatch::decode(r).map(|h| Entity::Hatch(Box::new(h)))
-    }),
+    ("HATCH", decode_hatch),
     ("IMAGE", |r| {
         Image::decode(r).map(|i| Entity::Image(Box::new(i)))
     }),
     ("LARGE_RADIAL_DIMENSION", |r| {
         Dimension::decode(r, DimType::LargeRadial).map(|d| Entity::Dimension(Box::new(d)))
     }),
-    ("LWPOLYLINE", |r| {
-        LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)))
-    }),
+    ("LWPOLYLINE", decode_lwpolyline),
     ("MULTILEADER", |r| {
         MultiLeader::decode(r).map(|m| Entity::MultiLeader(Box::new(m)))
     }),
-    ("OLE2FRAME", |r| {
-        Ole2Frame::decode(r).map(|o| Entity::Ole2Frame(Box::new(o)))
-    }),
+    ("OLE2FRAME", decode_ole2frame),
     ("WIPEOUT", |r| {
         Image::decode(r).map(|i| Entity::Wipeout(Box::new(i)))
     }),
@@ -1252,13 +1264,6 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
     let dim =
         |r: &mut ObjReader, t| Dimension::decode(r, t).map(|d| Entity::Dimension(Box::new(d)));
     let acis = |r: &mut ObjReader, k| AcisEntity::decode(r, k).map(|a| Entity::Acis(Box::new(a)));
-    let hatch = |r: &mut ObjReader| Hatch::decode(r).map(|h| Entity::Hatch(Box::new(h)));
-    let ole2frame =
-        |r: &mut ObjReader| Ole2Frame::decode(r).map(|o| Entity::Ole2Frame(Box::new(o)));
-    let proxy =
-        |r: &mut ObjReader| ProxyEntity::decode(r).map(|p| Entity::ProxyEntity(Box::new(p)));
-    let lwpolyline =
-        |r: &mut ObjReader| LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)));
     let code = match key {
         TypeKey::Fixed(code) => code,
         TypeKey::Class(name) => return Some(class_decoder(&ENTITY_CLASSES, name)?(r)),
@@ -1284,7 +1289,7 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
         ATTRIB => Attrib::decode(r).map(|a| Entity::Attrib(Box::new(a))),
         ATTDEF => AttDef::decode(r).map(|a| Entity::AttDef(Box::new(a))),
         MTEXT => MText::decode(r).map(|m| Entity::MText(Box::new(m))),
-        LWPOLYLINE => lwpolyline(r),
+        LWPOLYLINE => decode_lwpolyline(r),
         POLYLINE_2D => Polyline2d::decode(r).map(Entity::Polyline2d),
         POLYLINE_3D => Polyline3d::decode(r).map(Entity::Polyline3d),
         POLYLINE_PFACE => PolyfaceMesh::decode(r).map(Entity::PolyfaceMesh),
@@ -1305,13 +1310,13 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
         DIM_DIAMETER => dim(r, DimType::Diameter),
         LEADER => Leader::decode(r).map(|l| Entity::Leader(Box::new(l))),
         TOLERANCE => Tolerance::decode(r).map(Entity::Tolerance),
-        HATCH => hatch(r),
+        HATCH => decode_hatch(r),
         VIEWPORT => Viewport::decode(r).map(|v| Entity::Viewport(Box::new(v))),
         REGION => acis(r, AcisKind::Region),
         SOLID3D => acis(r, AcisKind::Solid3d),
         BODY => acis(r, AcisKind::Body),
-        OLE2FRAME => ole2frame(r),
-        ACAD_PROXY_ENTITY => proxy(r),
+        OLE2FRAME => decode_ole2frame(r),
+        ACAD_PROXY_ENTITY => decode_proxy_entity(r),
         _ => return None,
     })
 }
@@ -1745,9 +1750,7 @@ mod tests {
             .chain(OBJECT_CLASSES.iter().map(|(n, _)| n.to_string()))
             .collect();
         names.extend((0..FIRST_CLASS_NUMBER).filter_map(|c| Some(fixed_type(c)?.0.to_owned())));
-        names.extend((0..200u16).filter_map(|i| {
-            Some(crate::section::classes::known_class_name(usize::from(i))?.to_owned())
-        }));
+        names.extend(crate::section::classes::known_class_names().map(String::from));
         names.extend(
             ["ACAD_TABLE", "CELLSTYLEMAP", "AECC_STYLE", "", "dictionary"].map(String::from),
         );
