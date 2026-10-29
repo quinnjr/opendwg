@@ -81,7 +81,8 @@ pub enum Error {
     NotFound(Handle),
     /// The drawing, or the change asked for, is invalid: the error
     /// diagnostics saying why (from [`crate::Drawing::validate`] or the
-    /// editing method).
+    /// editing method); from a save, followed by the warnings of the
+    /// required objects the writer could not add, saying why.
     #[error("drawing is invalid: {} diagnostic(s): {}", .0.len(), first_diagnostics(.0))]
     Invalid(Vec<Diagnostic>),
 }

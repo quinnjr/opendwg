@@ -434,14 +434,35 @@ impl IndexState {
         }
     }
 
-    /// Record in `names` the new entry `h` named `folded` of `list` (a table
-    /// control when `table`, else a dictionary), if its names are indexed.
-    pub(crate) fn name_added(&mut self, list: Handle, folded: String, h: Handle, table: bool) {
-        if let Some(names) = self.names.get_mut(&list) {
-            names.entry(folded).or_default().push(h);
-            if table {
-                self.name_holders.entry(h).or_default().insert(list);
+    /// Record in `names` the new entry `h` of table control `control`, named
+    /// `folded` (none when it is no table entry), if the table's names are
+    /// indexed: as indexing the table finds it, it names the control among
+    /// its holders either way.
+    pub(crate) fn name_added_to_table(
+        &mut self,
+        control: Handle,
+        folded: Option<String>,
+        h: Handle,
+    ) {
+        if let Some(names) = self.names.get_mut(&control) {
+            if let Some(folded) = folded {
+                names.entry(folded).or_default().push(h);
             }
+            self.name_holders.entry(h).or_default().insert(control);
+        }
+    }
+
+    /// Record in `names` the new entry `h` named `folded` of dictionary
+    /// `dictionary`, if its names are indexed (its names are its own: it is
+    /// no holder).
+    pub(crate) fn name_added_to_dictionary(
+        &mut self,
+        dictionary: Handle,
+        folded: String,
+        h: Handle,
+    ) {
+        if let Some(names) = self.names.get_mut(&dictionary) {
+            names.entry(folded).or_default().push(h);
         }
     }
 

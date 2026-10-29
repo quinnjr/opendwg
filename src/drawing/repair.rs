@@ -12,8 +12,8 @@
 //!   and the defaults);
 //! - the named object dictionary's `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
 //!   dictionaries (civilcraft's own writer leaves `ACAD_PLOTSETTINGS` out):
-//!   empty, as AutoCAD creates them, and named by `$DICT_PLOTSETTINGS` /
-//!   `$DICT_ACAD_GROUP` (which, naming another dictionary the named object
+//!   empty, as AutoCAD creates them, and named by `$DICT_ACAD_GROUP` /
+//!   `$DICT_PLOTSETTINGS` (which, naming another dictionary the named object
 //!   dictionary does not list, would disagree with it).
 //!
 //! The additions are not made to the drawing, nor to a copy of it: they are
@@ -22,17 +22,22 @@
 //! refreshed copies (see `drawing::write`), validates and writes; the
 //! drawing itself is not changed. Each one is a warning, from
 //! [`Drawing::validate`] and [`Drawing::write_diagnostics`]. A repair that
-//! cannot be made (handles used up, an addition the API's checks refuse)
-//! is a warning saying why, and left to validation, which reports what is
-//! missing. An entry of the required name that is not a dictionary counts
-//! as present: no repair is made and validation reports it. The additions are built and checked by the code
+//! cannot be made (handles used up, an addition the API's checks refuse) is
+//! a warning saying why, and left to validation, which reports what is
+//! missing; a save it refuses gives the reason with its errors.
+//!
+//! A named dictionary is present when an entry of its name, compared without
+//! case, is a dictionary (see `api::first_dictionary`, the rule validation
+//! and the layout lookup share). An entry of the name that is not a
+//! dictionary takes the name: the dictionary cannot be added, and validation
+//! reports it missing. The additions are built and checked by the code
 //! [`Drawing::add_dim_style`] and [`Drawing::add_object`] use.
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
 use super::Drawing;
-use super::api::{invalid, next_handles};
+use super::api::{first_dictionary, next_handle_after};
 use super::new::dim_style;
 use crate::diag::{Diagnostic, Severity};
 use crate::error::{Error, Result};
@@ -40,8 +45,15 @@ use crate::handle::Handle;
 use crate::object::{Dictionary, DimStyle, NonGraphical, Object, TableKind};
 use crate::section::HeaderVars;
 
-/// The named object dictionary entries the writer creates empty.
-const EMPTY_NAMED_DICTIONARIES: [&str; 2] = ["ACAD_GROUP", "ACAD_PLOTSETTINGS"];
+/// The header variable naming a named object dictionary entry.
+type HeaderField = fn(&mut HeaderVars) -> &mut Handle;
+
+/// The named object dictionary entries the writer creates empty, with the
+/// header variable naming each.
+const EMPTY_NAMED_DICTIONARIES: [(&str, HeaderField); 2] = [
+    ("ACAD_GROUP", |h| &mut h.dict_acad_group),
+    ("ACAD_PLOTSETTINGS", |h| &mut h.dict_plotsettings),
+];
 
 fn warning(message: String) -> Diagnostic {
     Diagnostic {
@@ -95,8 +107,12 @@ pub(super) struct Repair {
     pub(super) objects: BTreeMap<Handle, Object>,
     /// The added objects' handles, ascending, above every object's.
     pub(super) added: Vec<Handle>,
-    /// A warning per addition.
+    /// A warning per addition, and per one that cannot be made.
     pub(super) warnings: Vec<Diagnostic>,
+    /// The warnings of the additions that cannot be made (saying why),
+    /// among `warnings`: a save validation refuses gives them with its
+    /// errors.
+    pub(super) failed: Vec<Diagnostic>,
 }
 
 impl Repair {
@@ -119,13 +135,16 @@ impl Repair {
     /// The next handle and the seed after it, as `Drawing::alloc_handle`
     /// gives it in the drawing with the additions so far.
     fn alloc(&self, d: &Drawing) -> Result<(Handle, Handle)> {
-        let last = self
-            .added
-            .last()
-            .copied()
-            .or_else(|| d.objects.last_key_value().map(|(&h, _)| h));
-        let (handles, seed) = next_handles(self.header.handseed, last, 1)?;
-        Ok((handles[0], seed))
+        let last = self.added.last().copied().or_else(|| d.last_handle());
+        next_handle_after(self.header.handseed, last)
+    }
+
+    /// Record the warning `w`, of an addition that `failed` when set.
+    fn warn(&mut self, w: Diagnostic, failed: bool) {
+        if failed {
+            self.failed.push(w.clone());
+        }
+        self.warnings.push(w);
     }
 }
 
@@ -135,9 +154,9 @@ impl Drawing {
     /// none the writer can add.
     pub(super) fn repair(&self) -> Option<Repair> {
         let standard = self.lacks_standard_dim_style();
-        let dictionaries: Vec<&str> = EMPTY_NAMED_DICTIONARIES
+        let dictionaries: Vec<(&str, HeaderField)> = EMPTY_NAMED_DICTIONARIES
             .into_iter()
-            .filter(|n| self.lacks_named_dictionary(n))
+            .filter(|(n, _)| self.lacks_named_dictionary(n))
             .collect();
         if !standard && dictionaries.is_empty() {
             return None;
@@ -147,23 +166,22 @@ impl Drawing {
             objects: BTreeMap::new(),
             added: Vec::new(),
             warnings: Vec::new(),
+            failed: Vec::new(),
         };
         if standard {
             let text_style = self.current_text_style().unwrap_or_default();
             let mut style = dim_style("Standard", &self.header, text_style);
             self.header_dim_handles(&mut style);
-            let w = match self.add_standard_dim_style(&mut r, style) {
-                Ok(h) => added_dim_style(h),
-                Err(e) => not_added(DIM_STYLE_WHAT, &e),
-            };
-            r.warnings.push(w);
+            match self.add_standard_dim_style(&mut r, style) {
+                Ok(h) => r.warn(added_dim_style(h), false),
+                Err(e) => r.warn(not_added(DIM_STYLE_WHAT, &e), true),
+            }
         }
-        for name in dictionaries {
-            let w = match self.add_named_dictionary(&mut r, name) {
-                Ok(h) => added_dictionary(name, h),
-                Err(e) => not_added(&dictionary_what(name), &e),
-            };
-            r.warnings.push(w);
+        for (name, field) in dictionaries {
+            match self.add_named_dictionary(&mut r, name, field) {
+                Ok(h) => r.warn(added_dictionary(name, h), false),
+                Err(e) => r.warn(not_added(&dictionary_what(name), &e), true),
+            }
         }
         (!r.warnings.is_empty()).then_some(r)
     }
@@ -191,16 +209,20 @@ impl Drawing {
     /// Add the empty dictionary `name` to the named object dictionary in
     /// `r`, as [`Drawing::add_object`] adds an entry, with its checks (owned
     /// by it, naming it among its reactors), and point the header variable
-    /// for it at the new dictionary.
+    /// `field` at the new dictionary.
     ///
-    /// Two of `add_object`'s rules differ here. A plain dictionary's
-    /// entries are kept in byte order when they were (as AutoCAD keeps
-    /// them), not appended. And
-    /// the writer writes the drawing's classes, so an object that needs a
-    /// class it lacks cannot be added; a DICTIONARY is of a fixed type and
-    /// never does. The name is checked against the drawing's entries, not
-    /// the repair's: the repair adds each name once.
-    fn add_named_dictionary(&self, r: &mut Repair, name: &str) -> Result<Handle> {
+    /// Two of `add_object`'s rules differ here. A plain dictionary's entries
+    /// are kept in byte order when they were (as AutoCAD keeps them), not
+    /// appended. And the writer writes the drawing's classes, so an object
+    /// that needs a class it lacks could not be added; a DICTIONARY is of a
+    /// fixed type and never does. The name is checked against the drawing's
+    /// entries, not the repair's: the repair adds each name once.
+    fn add_named_dictionary(
+        &self,
+        r: &mut Repair,
+        name: &str,
+        field: HeaderField,
+    ) -> Result<Handle> {
         let nod = self.header.dict_named_objects;
         let empty = Dictionary {
             entries: Vec::new(),
@@ -209,12 +231,7 @@ impl Drawing {
         };
         let object = NonGraphical::Dictionary(empty);
         let new = self.new_dictionary_entry(nod, name, object, || r.alloc(self))?;
-        if !new.classes.is_empty() {
-            return Err(invalid(
-                None,
-                "the dictionary needs a class the drawing lacks",
-            ));
-        }
+        debug_assert!(new.classes.is_empty(), "a DICTIONARY needs no class");
         let h = new.obj.handle();
         match r.edit(self, nod) {
             Some(Object::Other {
@@ -234,10 +251,7 @@ impl Drawing {
         r.add(h, new.seed, new.obj);
         // The header variable names the dictionary the named object
         // dictionary lists, so the two never disagree.
-        match name {
-            "ACAD_GROUP" => r.header.dict_acad_group = h,
-            _ => r.header.dict_plotsettings = h,
-        }
+        *field(&mut r.header) = h;
         Ok(h)
     }
 
@@ -286,17 +300,18 @@ impl Drawing {
             && self.table_named(TableKind::DimStyle, "Standard").is_empty()
     }
 
-    /// Whether the named object dictionary is a dictionary without an entry
-    /// `name`, compared without case (as AutoCAD looks keys up, and
-    /// [`Drawing::add_object`] refuses a second entry of the name), from
-    /// the name index.
+    /// Whether the named object dictionary is a dictionary without a
+    /// dictionary `name`: no entry of the name, compared without case (as
+    /// AutoCAD looks keys up), is one (see [`first_dictionary`]), from the
+    /// name index.
     fn lacks_named_dictionary(&self, name: &str) -> bool {
         let nod = self.header.dict_named_objects;
         self.objects
             .get(&nod)
             .and_then(Object::dictionary)
             .is_some()
-            && self.dictionary_named(nod, name).is_empty()
+            && first_dictionary(self.dictionary_named(nod, name), |h| self.objects.get(&h))
+                .is_none()
     }
 }
 
@@ -317,9 +332,9 @@ mod tests {
     /// overlay: a copy, with the objects added through the mutation API.
     fn repaired_copy(d: &Drawing) -> Option<(Drawing, Vec<Diagnostic>)> {
         let standard = d.lacks_standard_dim_style();
-        let names: Vec<&str> = EMPTY_NAMED_DICTIONARIES
+        let names: Vec<(&str, HeaderField)> = EMPTY_NAMED_DICTIONARIES
             .into_iter()
-            .filter(|n| d.lacks_named_dictionary(n))
+            .filter(|(n, _)| d.lacks_named_dictionary(n))
             .collect();
         if !standard && names.is_empty() {
             return None;
@@ -335,7 +350,7 @@ mod tests {
                 Err(e) => not_added(DIM_STYLE_WHAT, &e),
             });
         }
-        for name in names {
+        for (name, field) in names {
             let nod = d.header.dict_named_objects;
             let empty = Dictionary {
                 entries: Vec::new(),
@@ -363,10 +378,7 @@ mod tests {
                     n.entries.insert(at, entry);
                 }
             }
-            match name {
-                "ACAD_GROUP" => d.header.dict_acad_group = h,
-                _ => d.header.dict_plotsettings = h,
-            }
+            *field(&mut d.header) = h;
             warnings.push(added_dictionary(name, h));
         }
         (!warnings.is_empty()).then_some((d, warnings))
@@ -386,6 +398,8 @@ mod tests {
             r.warnings
         });
         assert!(own.iter().all(|w| warnings.contains(w)), "{what}");
+        // A DICTIONARY and a DIMSTYLE need no class: the repair adds none.
+        assert_eq!(copy.classes, d.classes, "{what}");
         let saved = crate::section::JulianDate {
             day: 2_461_000,
             ms: 1234,
@@ -432,6 +446,27 @@ mod tests {
         d.ref_index = Default::default();
         d
     }
+
+    /// The corpus drawings that need a repair, and whether they have objects
+    /// the writer cannot convert (the producers the module documentation
+    /// names).
+    const REPAIRED_CORPUS: &[(&str, bool)] = &[
+        ("brx-01.dwg", false),
+        ("brx-02.dwg", false),
+        ("brx-03.dwg", false),
+        ("cc-06.dwg", false),
+        ("cc-08.dwg", false),
+        ("cc-09.dwg", false),
+        ("cc-12.dwg", false),
+        ("cc-13.dwg", false),
+        ("dsh-01.dwg", true),
+        ("dsh-02.dwg", true),
+        ("ezdxf-04.dwg", false),
+        ("gdal-03.dwg", true),
+        ("gdal-04.dwg", true),
+        ("gdal-05.dwg", true),
+        ("geo7-01.dwg", false),
+    ];
 
     /// Drawings lacking each required object, all of them, or with a named
     /// object dictionary out of byte order or with a default, with a stale
@@ -512,50 +547,48 @@ mod tests {
             assert_repair_as_copy(d, &format!("case {i}"));
         }
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/files");
-        let Ok(files) = std::fs::read_dir(&dir) else {
-            assert!(
-                std::env::var("OPENDWG_REQUIRE_CORPUS").as_deref() != Ok("1"),
-                "OPENDWG_REQUIRE_CORPUS=1 but there is no corpus"
-            );
-            eprintln!("SKIPPED: no corpus; run scripts/fetch-corpus.sh");
-            return;
-        };
-        let (mut repaired, mut unconvertible) = (0, 0);
-        for f in files.flatten() {
-            let path = f.path();
-            if path.extension().is_none_or(|x| x != "dwg") {
+        let required = std::env::var("OPENDWG_REQUIRE_CORPUS").as_deref() == Ok("1");
+        for &(name, unconvertible) in REPAIRED_CORPUS {
+            let path = dir.join(name);
+            if !path.exists() {
+                assert!(!required, "OPENDWG_REQUIRE_CORPUS=1 but {name} is missing");
+                eprintln!("SKIPPED: {name} is missing; run scripts/fetch-corpus.sh");
                 continue;
             }
-            let Ok(mut d) = Drawing::open(&path) else {
-                continue;
-            };
-            if d.repair().is_none() {
-                continue;
-            }
-            let what = path.display().to_string();
+            let mut d = Drawing::open(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(d.repair().is_some(), "{name} needs no repair");
             // With unconvertible objects the write is refused, as it is for
             // the copy; validation and the warnings still compare.
-            assert_repair_as_copy(&d, &what);
-            repaired += 1;
+            assert_repair_as_copy(&d, name);
             let gone: Vec<Handle> = d
                 .unconvertible_objects()
                 .into_iter()
                 .map(|(h, _)| h)
                 .collect();
-            if !gone.is_empty() {
+            assert_eq!(!gone.is_empty(), unconvertible, "{name}");
+            if unconvertible {
                 d.remove_all(&gone)
-                    .unwrap_or_else(|e| panic!("{what}: removing the unconvertible objects: {e}"));
-                assert!(d.unconvertible_objects().is_empty(), "{what}");
-                assert_repair_as_copy(&d, &format!("{what}, unconvertible objects removed"));
-                unconvertible += 1;
+                    .unwrap_or_else(|e| panic!("{name}: removing the unconvertible objects: {e}"));
+                assert!(d.unconvertible_objects().is_empty(), "{name}");
+                assert_repair_as_copy(&d, &format!("{name}, unconvertible objects removed"));
             }
         }
-        // The corpus has 15 drawings that need a repair, 5 of them with
-        // objects the writer cannot convert.
-        assert!(
-            repaired >= 15 && unconvertible >= 5,
-            "{repaired} repaired, {unconvertible} unconvertible"
-        );
+        // No other corpus drawing needs a repair: the list is complete.
+        let Ok(files) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        for path in files.flatten().map(|f| f.path()) {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if path.extension().is_none_or(|x| x != "dwg")
+                || REPAIRED_CORPUS.iter().any(|&(n, _)| n == name)
+            {
+                continue;
+            }
+            // Versions the reader does not support are no drawings here.
+            if let Ok(d) = Drawing::open(&path) {
+                assert!(d.repair().is_none(), "{name} needs a repair: list it");
+            }
+        }
     }
 
     fn warned(d: &Drawing, what: &str) -> bool {
@@ -688,6 +721,68 @@ mod tests {
         assert_eq!(back.objects.len(), d.objects.len());
     }
 
+    /// A required named dictionary is present when an entry of its name,
+    /// in any case, is a dictionary: an entry of the name that is no
+    /// dictionary, listed before it in another case, is passed over alike
+    /// by the repairs, validation and the layout lookup. Without a
+    /// dictionary of the name, the entry takes the name: the repair is
+    /// refused, saying why, and validation reports the dictionary missing.
+    #[test]
+    fn named_dictionary_is_present_when_an_entry_of_its_name_is_one() {
+        let mut d = Drawing::new();
+        let nod = d.header.dict_named_objects;
+        let p1 = d.add_object(nod, "P1", NonGraphical::Placeholder).unwrap();
+        let p2 = d.add_object(nod, "P2", NonGraphical::Placeholder).unwrap();
+        let Some(Object::Other {
+            object: NonGraphical::Dictionary(n),
+            ..
+        }) = d.objects.get_mut(&nod)
+        else {
+            panic!("the named object dictionary");
+        };
+        n.entries.retain(|(name, _)| name != "P1" && name != "P2");
+        for (name, _) in &mut n.entries {
+            match name.as_str() {
+                "ACAD_GROUP" => *name = "acad_group".into(),
+                "ACAD_LAYOUT" => *name = "Acad_Layout".into(),
+                _ => {}
+            }
+        }
+        n.entries.insert(0, ("ACAD_GROUP".into(), p1));
+        n.entries.insert(0, ("ACAD_LAYOUT".into(), p2));
+        // The layouts are found through the named object dictionary.
+        d.header.dict_layouts = Handle(0);
+        d.ref_index = Default::default();
+        assert!(d.repair().is_none());
+        let missing = |d: &Drawing| {
+            d.validate()
+                .into_iter()
+                .filter(|x| x.message.contains("the named object dictionary has no"))
+                .collect::<Vec<_>>()
+        };
+        assert!(missing(&d).is_empty(), "{:?}", missing(&d));
+        assert_eq!(d.layouts().len(), 2);
+        // Without the dictionary, the entry that is none takes the name.
+        if let Some(Object::Other {
+            object: NonGraphical::Dictionary(n),
+            ..
+        }) = d.objects.get_mut(&nod)
+        {
+            n.entries.retain(|(name, _)| name != "acad_group");
+        }
+        d.ref_index = Default::default();
+        let r = d.repair().unwrap();
+        assert!(r.added.is_empty());
+        let [w] = &r.failed[..] else {
+            panic!("{:?}", r.warnings);
+        };
+        assert!(w.message.contains("already has an entry"), "{w:?}");
+        let [e] = &missing(&d)[..] else {
+            panic!("{:?}", missing(&d));
+        };
+        assert!(e.message.contains("ACAD_GROUP") && e.severity == Severity::Error);
+    }
+
     /// A named object dictionary without `ACAD_PLOTSETTINGS` (civilcraft's
     /// writer: `cc-12`) gets an empty one at save, which `$DICT_PLOTSETTINGS`
     /// names, among the entries in byte order.
@@ -729,7 +824,8 @@ mod tests {
     }
 
     /// A required object the writer cannot add is a warning saying why,
-    /// besides validation's error for what is missing.
+    /// besides validation's error for what is missing; a save refused for
+    /// it gives the reason with that error.
     #[test]
     fn repair_that_cannot_be_made_says_why() {
         let mut d = Drawing::new();
@@ -763,6 +859,14 @@ mod tests {
             "{w:?}"
         );
         assert!(warned(&d, "cannot add one"));
+        let Err(Error::Invalid(found)) = d.to_bytes() else {
+            panic!("the save is refused");
+        };
+        assert!(
+            found.iter().any(|x| x.severity == Severity::Error),
+            "{found:?}"
+        );
+        assert!(found.contains(w), "{found:?}");
     }
 
     /// A drawing that lacks nothing is not copied.

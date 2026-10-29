@@ -79,6 +79,26 @@ pub(super) fn fold_name(name: &str) -> String {
     folded(name).collect()
 }
 
+/// The first of `named`, the entries of one name in a dictionary (compared
+/// without case, as AutoCAD looks keys up) in list order, that `get` gives as
+/// a dictionary (with or without default).
+///
+/// The one rule for whether the named object dictionary has a required
+/// dictionary, shared by validation, the writer's repairs and
+/// [`Drawing::layouts`]: it has one when an entry of the name is a
+/// dictionary. An entry of the name that is not one is passed over, before
+/// or after the dictionary and in whatever case; without a dictionary of the
+/// name the repair is refused (the name is taken) and validation reports the
+/// dictionary missing.
+pub(super) fn first_dictionary<'a>(
+    named: impl IntoIterator<Item = Handle>,
+    get: impl Fn(Handle) -> Option<&'a Object>,
+) -> Option<Handle> {
+    named
+        .into_iter()
+        .find(|&h| get(h).and_then(Object::dictionary).is_some())
+}
+
 /// `$HANDSEED` `seed` of a drawing whose largest handle is `last`, moved
 /// past `last` when it is not above it (a damaged file), so a handle once
 /// used is never given again. When `last` is the largest possible handle (a
@@ -112,6 +132,14 @@ pub(super) fn next_handles(
             ),
         )),
     }
+}
+
+/// The handle [`Drawing::alloc_handle`] gives next when the seed is `seed`
+/// and the largest handle `last`, and the seed after it (see
+/// [`next_handles`]).
+pub(super) fn next_handle_after(seed: Handle, last: Option<Handle>) -> Result<(Handle, Handle)> {
+    let (handles, seed) = next_handles(seed, last, 1)?;
+    Ok((handles[0], seed))
 }
 
 #[cfg(test)]
@@ -150,6 +178,7 @@ impl<'a> Pending<'a> {
         }
     }
 
+    /// Whether `h` is one of the new handles, by binary search.
     fn contains(&self, h: Handle) -> bool {
         #[cfg(test)]
         self.lookups.set(self.lookups.get() + 1);
@@ -737,14 +766,12 @@ impl Drawing {
     }
 
     /// The layout dictionary: the header's, or the named object
-    /// dictionary's `ACAD_LAYOUT` entry.
+    /// dictionary's `ACAD_LAYOUT` dictionary (see [`first_dictionary`]).
     fn layout_dictionary(&self) -> Option<&[(String, Handle)]> {
         let entries = |h: Handle| Some(self.objects.get(&h)?.dictionary()?.entries.as_slice());
         entries(self.header.dict_layouts).or_else(|| {
-            let (_, h) = entries(self.named_objects())?
-                .iter()
-                .find(|(name, _)| name == "ACAD_LAYOUT")?;
-            entries(*h)
+            let named = self.dictionary_named(self.named_objects(), "ACAD_LAYOUT");
+            entries(first_dictionary(named, |h| self.objects.get(&h))?)
         })
     }
 
@@ -822,12 +849,18 @@ impl Drawing {
 
     // ---- handles ----
 
+    /// The largest handle of an object, if any.
+    pub(super) fn last_handle(&self) -> Option<Handle> {
+        self.objects.last_key_value().map(|(&h, _)| h)
+    }
+
     /// Make `$HANDSEED` the [`normalised_seed`], so a handle once used is
     /// never given again, even after its object is removed (used-up handles
-    /// stay so). Every mutation starts with it.
+    /// stay so). A removal calls it before its objects go, while the
+    /// largest handle is still an object's; adding needs no call, as
+    /// allocation starts from the normalised seed.
     fn normalise_seed(&mut self) {
-        let last = self.objects.last_key_value().map(|(&h, _)| h);
-        self.header.handseed = normalised_seed(self.header.handseed, last);
+        self.header.handseed = normalised_seed(self.header.handseed, self.last_handle());
     }
 
     /// Allocate a handle for a new object: the header's `$HANDSEED`, which
@@ -846,16 +879,13 @@ impl Drawing {
     /// The handle [`Drawing::alloc_handle`] gives next, and the seed after
     /// it, without allocating it.
     pub(super) fn next_handle(&self) -> Result<(Handle, Handle)> {
-        let last = self.objects.last_key_value().map(|(&h, _)| h);
-        let (handles, seed) = next_handles(self.header.handseed, last, 1)?;
-        Ok((handles[0], seed))
+        next_handle_after(self.header.handseed, self.last_handle())
     }
 
     /// Allocate `n` consecutive handles (see [`Drawing::alloc_handle`]); on
     /// error nothing changes, the seed included.
     fn alloc_handles(&mut self, n: usize) -> Result<Vec<Handle>> {
-        let last = self.objects.last_key_value().map(|(&h, _)| h);
-        let (handles, seed) = next_handles(self.header.handseed, last, n)?;
+        let (handles, seed) = next_handles(self.header.handseed, self.last_handle(), n)?;
         self.header.handseed = seed;
         Ok(handles)
     }
@@ -1422,12 +1452,9 @@ impl Drawing {
         object: NonGraphical,
     ) -> Result<Handle> {
         self.sync_index();
+        let folded = object.table_entry().map(|e| fold_name(&e.name));
         let new = self.new_table_entry(kind, object, || self.next_handle())?;
         let (h, control) = (new.obj.handle(), new.list);
-        let name = match &new.obj {
-            Object::Other { object, .. } => object.table_entry().map(|e| fold_name(&e.name)),
-            Object::Entity { .. } => None,
-        };
         self.header.handseed = new.seed;
         self.objects.insert(h, new.obj);
         if let Some(Object::Other {
@@ -1439,7 +1466,7 @@ impl Drawing {
         }
         let state = self.ref_index.get_mut();
         state.added(&self.objects, &[h], &[(control, h, SOFT_OWNER)]);
-        state.name_added(control, name.unwrap_or_default(), h, true);
+        state.name_added_to_table(control, folded, h);
         Ok(h)
     }
 
@@ -1545,7 +1572,7 @@ impl Drawing {
         }
         let state = self.ref_index.get_mut();
         state.added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
-        state.name_added(dictionary, fold_name(name), h, false);
+        state.name_added_to_dictionary(dictionary, fold_name(name), h);
         Ok(h)
     }
 
@@ -1779,7 +1806,7 @@ impl Drawing {
             &[record, begin, end],
             &[(control, record, SOFT_OWNER)],
         );
-        state.name_added(control, fold_name(name), record, true);
+        state.name_added_to_table(control, Some(fold_name(name)), record);
         Ok(record)
     }
 
@@ -2441,10 +2468,9 @@ mod tests {
         }
     }
 
-    /// Handles are never reused: with the largest handle taken, or once the
-    /// seed reaches it, allocation fails (the seed unchanged), also after
-    /// that object is removed; several handles at once are consecutive, and
-    /// a stale seed moves past every handle.
+    /// A seed above the largest handle is kept; one at or below it moves
+    /// just past it, and with the largest possible handle taken becomes that
+    /// handle (the handles are used up).
     #[test]
     fn normalised_seed_moves_past_the_last_handle() {
         for (seed, last, want) in [
@@ -2459,6 +2485,10 @@ mod tests {
         }
     }
 
+    /// Handles are never reused: with the largest handle taken, or once the
+    /// seed reaches it, allocation fails (the seed unchanged), also after
+    /// that object is removed; several handles at once are consecutive, and
+    /// a stale seed moves past every handle.
     #[test]
     fn alloc_handle_at_the_end_of_the_handle_space() {
         let exhausted = |r: Result<Vec<Handle>>| matches!(r, Err(Error::Invalid(d)) if d[0].message.contains("used up"));

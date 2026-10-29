@@ -99,7 +99,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::Drawing;
-use super::api::names_eq;
+use super::api::{first_dictionary, names_eq};
 use super::refs::{RefIndex, object_refs};
 use super::write::{Changes, WriteWork};
 use crate::diag::{Diagnostic, Severity};
@@ -1100,18 +1100,19 @@ impl<'a> Validator<'a> {
         let name = self.name(nod);
         let mut layouts = None;
         for required in NAMED_OBJECTS {
-            // Keys compare without case, as AutoCAD looks them up.
-            let entry = entries
+            // Keys compare without case, as AutoCAD looks them up; an
+            // entry of the name that is no dictionary is passed over.
+            let named = entries
                 .iter()
-                .find(|(n, _)| names_eq(n, required))
+                .filter(|(n, _)| names_eq(n, required))
                 .map(|&(_, h)| h);
-            match entry.and_then(|h| self.get(h).map(|o| (h, o))) {
-                Some((h, o)) if is_dictionary(o) => {
+            match first_dictionary(named, |h| self.get(h)) {
+                Some(h) => {
                     if required == "ACAD_LAYOUT" {
                         layouts = Some(h);
                     }
                 }
-                _ => self.error(
+                None => self.error(
                     Some(nod),
                     format!("{name}: the named object dictionary has no {required} dictionary"),
                 ),

@@ -434,6 +434,9 @@ pub(super) struct Changes {
     header: Option<Box<HeaderVars>>,
     /// A warning per addition (see [`Drawing::validate`]).
     pub(super) repairs: Vec<Diagnostic>,
+    /// The warnings of the additions that cannot be made, saying why (see
+    /// `Repair::failed`).
+    repair_failures: Vec<Diagnostic>,
 }
 
 impl Changes {
@@ -534,10 +537,12 @@ impl Drawing {
     }
 
     /// Warnings about what writing the drawing as R2018 adds (required
-    /// objects the drawing lacks, see `drawing::repair`) and leaves out
-    /// (layout viewport entries naming no object, sections the writer cannot
-    /// carry over; see the module documentation of `drawing::write`). They
-    /// do not stop the write.
+    /// objects the drawing lacks, see `drawing::repair`, or that it lacks
+    /// and the writer cannot add one of, saying why: "... the writer cannot
+    /// add one: ...") and leaves out (layout viewport entries naming no
+    /// object, sections the writer cannot carry over; see the module
+    /// documentation of `drawing::write`). They do not stop the write;
+    /// validation reports a required object that could not be added.
     pub fn write_diagnostics(&self) -> Vec<Diagnostic> {
         // A dry run of the write: the same steps, without the checks that
         // refuse it and without encoding the objects.
@@ -568,9 +573,10 @@ impl Drawing {
     /// Fails with [`Error::UnconvertibleObjects`] when objects cannot be
     /// written as R2018 (see [`Drawing::unconvertible_objects`]), and with
     /// [`Error::Invalid`] when [`Drawing::validate`] finds errors in the
-    /// drawing as it will be written or an ACIS entity in the R2013+ form
-    /// has no data storage record (see the module documentation). The
-    /// drawing is not changed. Sections left
+    /// drawing as it will be written (followed by the warnings of the
+    /// required objects the writer could not add, saying why) or an ACIS
+    /// entity in the R2013+ form has no data storage record (see the module
+    /// documentation). The drawing is not changed. Sections left
     /// out (with a warning) are listed by [`Drawing::write_diagnostics`].
     pub fn to_bytes_at(&self, saved: JulianDate) -> Result<Vec<u8>> {
         self.write(saved, &mut WriteWork::default(), false)
@@ -607,12 +613,14 @@ impl Drawing {
             }
             return Ok((Vec::new(), diags));
         }
-        let invalid: Vec<Diagnostic> = self
+        let mut invalid: Vec<Diagnostic> = self
             .validate_written(&changes, &mut 0)
             .into_iter()
             .filter(|d| d.severity == Severity::Error)
             .collect();
         if !invalid.is_empty() {
+            // Why a required object is missing: the writer could not add it.
+            invalid.append(&mut changes.repair_failures);
             return Err(Error::Invalid(invalid));
         }
         let (bytes, warnings) = self.encode_file(saved, work, changes)?;
@@ -840,6 +848,7 @@ impl Drawing {
             changes.added = repair.added;
             changes.header = Some(Box::new(repair.header));
             changes.repairs = repair.warnings;
+            changes.repair_failures = repair.failed;
         }
         let Drops {
             dropped, owners, ..
