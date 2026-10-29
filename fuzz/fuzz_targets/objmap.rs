@@ -5,5 +5,5 @@ use libfuzzer_sys::fuzz_target;
 use opendwg::section::objmap;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = objmap::decode_with_diagnostics(data);
+    let _ = objmap::decode(data);
 });

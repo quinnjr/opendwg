@@ -250,3 +250,31 @@ fn undecodable_data_storage_is_kept() {
     let saved = container::read(&back.to_bytes_at(SAVED).unwrap()).unwrap();
     assert_eq!(saved.sections[&SectionName::AcDsPrototype], bad);
 }
+
+/// An R2007+ drawing saved unchanged keeps its Template section byte for
+/// byte: it is copied, not re-encoded, while $MEASUREMENT is the one read
+/// from it.
+#[test]
+fn corpus_template_is_copied() {
+    let mut seen = 0;
+    for (e, path) in common::fetched_files_or_skip() {
+        let bytes = std::fs::read(&path).unwrap();
+        let d = Drawing::from_bytes(&bytes).unwrap();
+        if d.source_version().unwrap() < Version::R2007 || !d.unconvertible_objects().is_empty() {
+            continue;
+        }
+        let out = d
+            .to_bytes()
+            .unwrap_or_else(|err| panic!("{}: {err}", e.name));
+        let read = container::read(&bytes).unwrap();
+        let written = container::read(&out).unwrap();
+        assert_eq!(
+            written.sections[&SectionName::Template],
+            read.sections[&SectionName::Template],
+            "{}",
+            e.name
+        );
+        seen += 1;
+    }
+    assert!(seen > 0);
+}

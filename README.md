@@ -77,9 +77,11 @@ fn main() -> opendwg::Result<()> {
 `examples/app_workflow.rs` runs this end to end, with the recovery of an
 old drawing described below (`cargo run --example app_workflow`).
 
-Reading is fault tolerant: an object that cannot be decoded is kept as raw
-bytes with a diagnostic, and only a broken container (file header, section
-maps, object map) fails the read.
+Reading is fault tolerant about objects: one that cannot be decoded is kept
+as raw bytes with a diagnostic (or, when even its common data is
+unreadable, kept as stored and unwritable). A broken container (file
+header, section maps), header section, classes section or object map (any
+of its pages) fails the read.
 
 Writing never drops data silently. What it cannot carry over (an unknown
 section of an old file, a damaged preview, ...) is left out with a warning:

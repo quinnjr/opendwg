@@ -265,6 +265,8 @@ impl Drawing {
     /// [`Drawing::validate`] with the writer's `changes`, counting the
     /// references and list entries examined in `work`.
     pub(super) fn validate_written(&self, changes: &Changes, work: &mut usize) -> Vec<Diagnostic> {
+        // Before the lock: model space's fallback takes it.
+        let model_space = self.model_space();
         let mut state = self.ref_index.lock();
         let index = state.ensure(&self.objects);
         let overlay = changes
@@ -294,7 +296,7 @@ impl Drawing {
             changes,
             index,
             overlay,
-            model_space: self.model_space(),
+            model_space,
             unconvertible: &unconvertible,
             out: Vec::new(),
             work: 0,
