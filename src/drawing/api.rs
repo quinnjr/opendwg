@@ -33,10 +33,10 @@
 //! joins it and a removed entity leaves it, but other users added here do
 //! not join it; saving refreshes it (`drawing::write`).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::Drawing;
-use super::refs::{IndexState, RefIndex, object_refs};
+use super::refs::{IndexState, RefIndex, encoded_refs, object_refs};
 use crate::diag::{Diagnostic, Severity};
 use crate::error::{Error, Result};
 use crate::handle::Handle;
@@ -45,15 +45,15 @@ use crate::object::Dictionary;
 use crate::object::tables::{HARD_OWNER, SOFT_OWNER, SOFT_POINTER};
 use crate::object::{
     Attrib, Block, BlockRecord, DictionaryWithDefault, DimStyle, Entity, EntityCommon, EntityList,
-    ImageDefReactor, Layer, Layout, Linetype, LinetypeRef, MInsert, NonGraphical, Object,
-    ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, type_refs,
+    ImageDefReactor, Layer, Layout, Linetype, LinetypeRef, MInsert, NonGraphical, ObjWriter,
+    Object, ObjectCommon, TableControl, TableEntry, TableKind, TextStyle, encode_object_common,
 };
 use crate::section::DxfClass;
 use crate::section::classes::{FIRST_CLASS_NUMBER, known_class};
 use crate::section::header::handle_vars;
 
 /// An [`Error::Invalid`] with one error diagnostic.
-fn invalid(handle: Option<Handle>, message: impl Into<String>) -> Error {
+pub(super) fn invalid(handle: Option<Handle>, message: impl Into<String>) -> Error {
     Error::Invalid(vec![Diagnostic {
         severity: Severity::Error,
         handle,
@@ -61,11 +61,149 @@ fn invalid(handle: Option<Handle>, message: impl Into<String>) -> Error {
     }])
 }
 
-/// Symbol table names compare without case, as in AutoCAD.
+/// The characters of `name` without case: symbol table names (and
+/// dictionary keys) compare so, as in AutoCAD. The one definition behind
+/// [`names_eq`] and [`fold_name`].
+fn folded(name: &str) -> impl Iterator<Item = char> + '_ {
+    name.chars().flat_map(char::to_lowercase)
+}
+
+/// Whether two names are equal without case (see [`folded`]).
 pub(super) fn names_eq(a: &str, b: &str) -> bool {
-    a.chars()
-        .flat_map(char::to_lowercase)
-        .eq(b.chars().flat_map(char::to_lowercase))
+    folded(a).eq(folded(b))
+}
+
+/// `name` without case (see [`folded`]), as the name index keys it: two
+/// names are equal without case exactly when these are equal.
+pub(super) fn fold_name(name: &str) -> String {
+    folded(name).collect()
+}
+
+/// The first of `named`, the entries of one name in a dictionary (compared
+/// without case, as AutoCAD looks keys up) in list order, that `get` gives as
+/// a dictionary (with or without default).
+///
+/// The one rule for whether the named object dictionary has a required
+/// dictionary, shared by validation, the writer's repairs and
+/// [`Drawing::layouts`]: it has one when an entry of the name is a
+/// dictionary. An entry of the name that is not one is passed over, before
+/// or after the dictionary and in whatever case; without a dictionary of the
+/// name the repair is refused (the name is taken) and validation reports the
+/// dictionary missing.
+pub(super) fn first_dictionary<'a>(
+    named: impl IntoIterator<Item = Handle>,
+    get: impl Fn(Handle) -> Option<&'a Object>,
+) -> Option<Handle> {
+    named
+        .into_iter()
+        .find(|&h| get(h).and_then(Object::dictionary).is_some())
+}
+
+/// `$HANDSEED` `seed` of a drawing whose largest handle is `last`, moved
+/// past `last` when it is not above it (a damaged file), so a handle once
+/// used is never given again. When `last` is the largest possible handle (a
+/// hostile file) the seed becomes that handle: the handles are used up.
+pub(super) fn normalised_seed(seed: Handle, last: Option<Handle>) -> Handle {
+    match last {
+        Some(last) if seed <= last => Handle(last.0.saturating_add(1)),
+        _ => seed,
+    }
+}
+
+/// The `n` consecutive handles [`Drawing::alloc_handles`] gives when the
+/// seed is `seed` and the largest handle `last`, and the seed after them,
+/// starting from the [`normalised_seed`]. [`Error::Invalid`] when the
+/// handles are used up.
+pub(super) fn next_handles(
+    seed: Handle,
+    last: Option<Handle>,
+    n: usize,
+) -> Result<(Vec<Handle>, Handle)> {
+    let first = normalised_seed(seed, last).0.max(1);
+    let past = last.is_none_or(|last| last.0 < first);
+    match u64::try_from(n).ok().and_then(|n| first.checked_add(n)) {
+        // `end` is at most the largest handle, never given.
+        Some(end) if past => Ok(((first..end).map(Handle).collect(), Handle(end))),
+        _ => Err(invalid(
+            None,
+            format!(
+                "the handles are used up: {n} more cannot be allocated above $HANDSEED {}",
+                Handle(first)
+            ),
+        )),
+    }
+}
+
+/// The handle [`Drawing::alloc_handle`] gives next when the seed is `seed`
+/// and the largest handle `last`, and the seed after it (see
+/// [`next_handles`]).
+pub(super) fn next_handle_after(seed: Handle, last: Option<Handle>) -> Result<(Handle, Handle)> {
+    let (handles, seed) = next_handles(seed, last, 1)?;
+    Ok((handles[0], seed))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The table entries [`Drawing::table_handles`] gave on this thread, for
+    /// tests: the work of reading a table, which a name lookup from the name
+    /// index does once per table, and a scan of the table at every lookup.
+    static TABLE_ENTRIES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The new handles of objects added together (a family: a polyline and
+/// its vertices), ascending, and the one way [`Drawing::check_new`] asks
+/// whether a handle is among them: a binary search, as a family's new
+/// handles are many and each object makes several references.
+struct Pending<'a> {
+    handles: &'a [Handle],
+    /// The handles compared, for tests.
+    #[cfg(test)]
+    probes: std::cell::Cell<usize>,
+    /// The membership questions asked, for tests.
+    #[cfg(test)]
+    lookups: std::cell::Cell<usize>,
+}
+
+impl<'a> Pending<'a> {
+    /// `handles` must be ascending; the adding methods allocate them so
+    /// (see [`Drawing::alloc_handles`]), and `build_family` checks it once
+    /// per family.
+    fn new(handles: &'a [Handle]) -> Self {
+        Pending {
+            handles,
+            #[cfg(test)]
+            probes: Default::default(),
+            #[cfg(test)]
+            lookups: Default::default(),
+        }
+    }
+
+    /// Whether `h` is one of the new handles, by binary search.
+    fn contains(&self, h: Handle) -> bool {
+        #[cfg(test)]
+        self.lookups.set(self.lookups.get() + 1);
+        self.handles
+            .binary_search_by(|p| {
+                #[cfg(test)]
+                self.probes.set(self.probes.get() + 1);
+                p.cmp(&h)
+            })
+            .is_ok()
+    }
+}
+
+/// An object built and checked to be added, as the adding method it is
+/// built for checks it, and not added (see [`Drawing::new_table_entry`],
+/// [`Drawing::new_dictionary_entry`]).
+pub(super) struct NewObject {
+    /// The object, under its new handle.
+    pub(super) obj: Object,
+    /// `$HANDSEED` past its handle.
+    pub(super) seed: Handle,
+    /// The table control or dictionary to list it.
+    pub(super) list: Handle,
+    /// The classes the drawing lacks for it.
+    pub(super) classes: Vec<DxfClass>,
 }
 
 /// Whether `obj` owns a list R2000 stores as a first/last pair that was not
@@ -122,9 +260,11 @@ fn detach(obj: &mut Object, xs: &HashSet<Handle>) {
                     drop(&mut c.extra);
                 }
             }
-            NonGraphical::Dictionary(d) => d.entries.retain(|(_, h)| !gone(h)),
-            NonGraphical::DictionaryWithDefault(d) => {
-                d.dictionary.entries.retain(|(_, h)| !gone(h));
+            NonGraphical::Dictionary(d)
+            | NonGraphical::DictionaryWithDefault(DictionaryWithDefault {
+                dictionary: d, ..
+            }) => {
+                d.entries.retain(|(_, h)| !gone(h));
             }
             NonGraphical::Group(g) => drop(&mut g.entities),
             NonGraphical::SortEntsTable(s) => s.entries.retain(|(_, e)| !gone(e)),
@@ -343,12 +483,15 @@ impl Drawing {
             _ => &[],
         };
         let mut seen = HashSet::new();
-        extra
+        let out: Vec<Handle> = extra
             .iter()
             .chain(&c.entries)
             .copied()
             .filter(|&h| h.0 != 0 && seen.insert(h))
-            .collect()
+            .collect();
+        #[cfg(test)]
+        TABLE_ENTRIES_READ.set(TABLE_ENTRIES_READ.get() + out.len());
+        out
     }
 
     fn table_iter<'a, T: 'a>(
@@ -470,9 +613,88 @@ impl Drawing {
 
     /// The layer named `name`, compared without case as AutoCAD does.
     pub fn layer_by_name(&self, name: &str) -> Option<Handle> {
-        self.layers()
-            .find(|(_, l)| names_eq(&l.entry.name, name))
-            .map(|(h, _)| h)
+        self.table_named(TableKind::Layer, name)
+            .into_iter()
+            .find(|&h| self.layer(h).is_some())
+    }
+
+    /// The entries of the table of `kind` named `name` (compared without
+    /// case), in table order (see [`Drawing::table_handles`]), from the name
+    /// index (see `IndexState::names`): the table's names are read once,
+    /// not at every lookup.
+    pub(super) fn table_named(&self, kind: TableKind, name: &str) -> Vec<Handle> {
+        let Some((control, _)) = self.table_control(kind) else {
+            return Vec::new();
+        };
+        self.named(control, name, || {
+            self.table_handles(kind)
+                .into_iter()
+                .map(|h| {
+                    let name = match self.objects.get(&h) {
+                        Some(Object::Other { object, .. }) => object.table_entry(),
+                        _ => None,
+                    };
+                    (name.map(|e| e.name.clone()), h)
+                })
+                .collect()
+        })
+    }
+
+    /// The entries of dictionary (with or without default) `dictionary`
+    /// named `name` (compared without case), in list order, from the name
+    /// index; none when it is not a dictionary.
+    pub(super) fn dictionary_named(&self, dictionary: Handle, name: &str) -> Vec<Handle> {
+        let Some(d) = self.objects.get(&dictionary).and_then(Object::dictionary) else {
+            return Vec::new();
+        };
+        self.named(dictionary, name, || {
+            d.entries
+                .iter()
+                .map(|(n, h)| (Some(n.clone()), *h))
+                .collect()
+        })
+    }
+
+    /// The handles named `name` in list `list` (a table control, else a
+    /// dictionary), indexing the list's `(name, handle)` pairs first if it
+    /// is not indexed. A table's entries without a name (an object that is
+    /// no table entry) are not indexed by name, but name the control among
+    /// their holders all the same: changed into a named entry through
+    /// `get_mut`, they make the table's names be read again.
+    fn named(
+        &self,
+        list: Handle,
+        name: &str,
+        entries: impl FnOnce() -> Vec<(Option<String>, Handle)>,
+    ) -> Vec<Handle> {
+        let mut state = self.ref_index.lock();
+        if !state.names.contains_key(&list) {
+            let table = matches!(
+                self.objects.get(&list),
+                Some(Object::Other {
+                    object: NonGraphical::TableControl(_),
+                    ..
+                })
+            );
+            let mut names: HashMap<String, Vec<Handle>> = HashMap::new();
+            for (n, h) in entries() {
+                if let Some(n) = n {
+                    names.entry(fold_name(&n)).or_default().push(h);
+                }
+                if table {
+                    state.name_holders.entry(h).or_default().insert(list);
+                }
+            }
+            #[cfg(test)]
+            {
+                state.name_scans += 1;
+            }
+            state.names.insert(list, names);
+        }
+        state.names[&list]
+            .get(&fold_name(name))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The model space block record: the header's, or the block record named
@@ -544,24 +766,12 @@ impl Drawing {
     }
 
     /// The layout dictionary: the header's, or the named object
-    /// dictionary's `ACAD_LAYOUT` entry.
+    /// dictionary's `ACAD_LAYOUT` dictionary (see [`first_dictionary`]).
     fn layout_dictionary(&self) -> Option<&[(String, Handle)]> {
-        let entries = |h: Handle| match self.objects.get(&h) {
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            }) => Some(d.entries.as_slice()),
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => Some(d.dictionary.entries.as_slice()),
-            _ => None,
-        };
+        let entries = |h: Handle| Some(self.objects.get(&h)?.dictionary()?.entries.as_slice());
         entries(self.header.dict_layouts).or_else(|| {
-            let (_, h) = entries(self.named_objects())?
-                .iter()
-                .find(|(name, _)| name == "ACAD_LAYOUT")?;
-            entries(*h)
+            let named = self.dictionary_named(self.named_objects(), "ACAD_LAYOUT");
+            entries(first_dictionary(named, |h| self.objects.get(&h))?)
         })
     }
 
@@ -639,17 +849,18 @@ impl Drawing {
 
     // ---- handles ----
 
-    /// Move a `$HANDSEED` that is not above every handle (a damaged file)
-    /// past them, so a handle once used is never given again, even after its
-    /// object is removed. Every mutation starts with it. When the largest
-    /// handle is the largest possible one (a hostile file) the seed becomes
-    /// that handle: the handles are used up, and stay so after removals.
+    /// The largest handle of an object, if any.
+    pub(super) fn last_handle(&self) -> Option<Handle> {
+        self.objects.last_key_value().map(|(&h, _)| h)
+    }
+
+    /// Make `$HANDSEED` the [`normalised_seed`], so a handle once used is
+    /// never given again, even after its object is removed (used-up handles
+    /// stay so). A removal calls it before its objects go, while the
+    /// largest handle is still an object's; adding needs no call, as
+    /// allocation starts from the normalised seed.
     fn normalise_seed(&mut self) {
-        if let Some((&last, _)) = self.objects.last_key_value() {
-            if self.header.handseed <= last {
-                self.header.handseed = Handle(last.0.saturating_add(1));
-            }
-        }
+        self.header.handseed = normalised_seed(self.header.handseed, self.last_handle());
     }
 
     /// Allocate a handle for a new object: the header's `$HANDSEED`, which
@@ -665,45 +876,45 @@ impl Drawing {
         Ok(self.alloc_handles(1)?[0])
     }
 
+    /// The handle [`Drawing::alloc_handle`] gives next, and the seed after
+    /// it, without allocating it.
+    pub(super) fn next_handle(&self) -> Result<(Handle, Handle)> {
+        next_handle_after(self.header.handseed, self.last_handle())
+    }
+
     /// Allocate `n` consecutive handles (see [`Drawing::alloc_handle`]); on
     /// error nothing changes, the seed included.
     fn alloc_handles(&mut self, n: usize) -> Result<Vec<Handle>> {
-        let seed = self.header.handseed;
-        self.normalise_seed();
-        let first = self.header.handseed.0.max(1);
-        let past = self
-            .objects
-            .last_key_value()
-            .is_none_or(|(last, _)| last.0 < first);
-        match u64::try_from(n).ok().and_then(|n| first.checked_add(n)) {
-            // `end` is at most the largest handle, never given.
-            Some(end) if past => {
-                self.header.handseed = Handle(end);
-                Ok((first..end).map(Handle).collect())
-            }
-            _ => {
-                self.header.handseed = seed;
-                Err(invalid(
-                    None,
-                    format!(
-                        "the handles are used up: {n} more cannot be allocated above \
-                         $HANDSEED {}",
-                        Handle(first)
-                    ),
-                ))
-            }
-        }
+        let (handles, seed) = next_handles(self.header.handseed, self.last_handle(), n)?;
+        self.header.handseed = seed;
+        Ok(handles)
     }
 
     // ---- adding ----
 
     /// Check a new object: its common data has no extension dictionary (it
     /// cannot share one) and every reactor exists; every reference it makes
-    /// is to an existing object or one in `pending` (added with it), and it
-    /// can be encoded as R2018; an entity's layer is a layer, its linetype a
-    /// linetype, and a multiline has as many lines as its style has
-    /// elements (the kind checks of `validate()`).
-    fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
+    /// is to an existing object or one in `pending` (added with it, in
+    /// ascending order), and it can be encoded as R2018, its common data
+    /// (extended data) included, with every reference listed (else the
+    /// reference index could not account for it, and removals would be
+    /// refused); an entity's layer is a layer, its linetype a linetype, and
+    /// a multiline has as many lines as its style has elements (the kind
+    /// checks of `validate()`).
+    pub(super) fn check_new(&self, obj: &Object, pending: &[Handle]) -> Result<()> {
+        let pending = Pending::new(pending);
+        let result = self.check_new_in(obj, &pending);
+        #[cfg(test)]
+        {
+            let mut state = self.ref_index.lock();
+            state.pending_probes += pending.probes.get();
+            state.pending_lookups += pending.lookups.get();
+        }
+        result
+    }
+
+    /// [`Drawing::check_new`], with the new handles `pending`.
+    fn check_new_in(&self, obj: &Object, pending: &Pending) -> Result<()> {
         let common = obj.object_common();
         if common.xdict.is_some() {
             return Err(invalid(
@@ -711,12 +922,21 @@ impl Drawing {
                 "a new object cannot have an extension dictionary",
             ));
         }
-        let exists = |h: Handle| self.objects.contains_key(&h) || pending.contains(&h);
+        let new = |h: Handle| pending.contains(h);
+        let exists = |h: Handle| self.objects.contains_key(&h) || new(h);
         if let Some(&r) = common.reactors.iter().find(|&&r| !exists(r)) {
             return Err(Error::NotFound(r));
         }
-        type_refs(obj).1?;
-        if let Some((t, _)) = object_refs(obj).0.into_iter().find(|&(t, _)| !exists(t)) {
+        // The type data and an entity's common data are encoded once, for
+        // their references and errors; the common data's encoder checks the
+        // extended data (no empty application, binary chunks of at most 255
+        // bytes, at most 65535 bytes per application, ...).
+        let (refs, encoded, _) = encoded_refs(obj);
+        encoded?;
+        if let Object::Other { common, .. } = obj {
+            encode_object_common(&mut ObjWriter::recording(common.handle), common)?;
+        }
+        if let Some((t, _)) = refs.into_iter().find(|&(t, _)| !exists(t)) {
             return Err(Error::NotFound(t));
         }
         if let Object::Entity { common, .. } = obj {
@@ -726,7 +946,7 @@ impl Drawing {
                     object: NonGraphical::Layer(_),
                     ..
                 })
-            ) && !pending.contains(&common.layer)
+            ) && !new(common.layer)
             {
                 return Err(invalid(
                     Some(common.obj.handle),
@@ -742,7 +962,7 @@ impl Drawing {
                         object: NonGraphical::Linetype(_),
                         ..
                     })
-                ) && !pending.contains(&lt)
+                ) && !new(lt)
                 {
                     return Err(invalid(
                         Some(common.obj.handle),
@@ -842,10 +1062,11 @@ impl Drawing {
     /// (at any depth of nested inserts), for common data with an
     /// extension dictionary, for a layer that is not a layer or a linetype
     /// that is not a linetype, for a multiline whose line count is not its
-    /// style's element count, for an entity that cannot be encoded as R2018
-    /// and for an entity of a class
-    /// type the library has no class definition of. A reference to a missing
-    /// object is [`Error::NotFound`]. On error nothing changes.
+    /// style's element count, and for an entity of a class type the library
+    /// has no class definition of. An entity that cannot be encoded as R2018
+    /// (its extended data included: an application without items, a binary
+    /// chunk over 255 bytes, ...) is [`Error::Encode`]; a reference to a
+    /// missing object is [`Error::NotFound`]. On error nothing changes.
     ///
     /// A TEXT or MTEXT with a null style (as [`crate::object::Text::new`]
     /// and [`crate::object::MText::new`] leave it) gets the current text
@@ -1126,18 +1347,19 @@ impl Drawing {
             if b == to {
                 return true;
             }
+            #[cfg(test)]
             if !state.block_inserts.contains_key(&b) {
-                let targets: HashSet<Handle> = self
-                    .entities_in(b)
+                state.block_scans += 1;
+            }
+            let targets = state.block_inserts.entry(b).or_insert_with(|| {
+                self.entities_in(b)
                     .filter_map(|e| match self.objects.get(&e) {
                         Some(Object::Entity { entity, .. }) => insert_block(entity),
                         _ => None,
                     })
-                    .collect();
-                state.block_scans += 1;
-                state.block_inserts.insert(b, targets);
-            }
-            for &t in &state.block_inserts[&b] {
+                    .collect()
+            });
+            for &t in targets.iter() {
                 if seen.insert(t) {
                     stack.push(t);
                 }
@@ -1214,6 +1436,8 @@ impl Drawing {
                 object: NonGraphical::ImageDefReactor(ImageDefReactor { class_version: 2 }),
             });
         }
+        // Once per family, not per object (see `Pending`).
+        debug_assert!(handles.is_sorted(), "new handles are allocated ascending");
         for obj in &objects {
             self.check_new(obj, handles)?;
         }
@@ -1227,6 +1451,34 @@ impl Drawing {
         kind: TableKind,
         object: NonGraphical,
     ) -> Result<Handle> {
+        self.sync_index();
+        let folded = object.table_entry().map(|e| fold_name(&e.name));
+        let new = self.new_table_entry(kind, object, || self.next_handle())?;
+        let (h, control) = (new.obj.handle(), new.list);
+        self.header.handseed = new.seed;
+        self.objects.insert(h, new.obj);
+        if let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = self.objects.get_mut(&control)
+        {
+            c.entries.push(h);
+        }
+        let state = self.ref_index.get_mut();
+        state.added(&self.objects, &[h], &[(control, h, SOFT_OWNER)]);
+        state.name_added_to_table(control, folded, h);
+        Ok(h)
+    }
+
+    /// The entry `object` of the table of `kind`, owned by its control,
+    /// under the handle `alloc` gives (with the seed after it), checked as
+    /// [`Drawing::add_table_entry`] adds it: the drawing does not change.
+    pub(super) fn new_table_entry(
+        &self,
+        kind: TableKind,
+        object: NonGraphical,
+        alloc: impl FnOnce() -> Result<(Handle, Handle)>,
+    ) -> Result<NewObject> {
         let Some((control, _)) = self.table_control(kind) else {
             return Err(invalid(
                 None,
@@ -1239,9 +1491,7 @@ impl Drawing {
             .unwrap_or_default();
         let unnamed_shape = matches!(&object, NonGraphical::TextStyle(s) if s.shape_file);
         self.check_new_name(kind, &name, unnamed_shape)?;
-        self.sync_index();
-        let seed = self.header.handseed;
-        let h = self.alloc_handle()?;
+        let (h, seed) = alloc()?;
         let obj = Object::Other {
             common: ObjectCommon {
                 handle: h,
@@ -1250,22 +1500,13 @@ impl Drawing {
             },
             object,
         };
-        if let Err(e) = self.check_new(&obj, &[h]) {
-            self.header.handseed = seed;
-            return Err(e);
-        }
-        self.objects.insert(h, obj);
-        if let Some(Object::Other {
-            object: NonGraphical::TableControl(c),
-            ..
-        }) = self.objects.get_mut(&control)
-        {
-            c.entries.push(h);
-        }
-        self.ref_index
-            .get_mut()
-            .added(&self.objects, &[h], &[(control, h, SOFT_OWNER)]);
-        Ok(h)
+        self.check_new(&obj, &[h])?;
+        Ok(NewObject {
+            obj,
+            seed,
+            list: control,
+            classes: Vec::new(),
+        })
     }
 
     /// A new entry's name must not be empty (an unnamed shape file excepted)
@@ -1281,11 +1522,7 @@ impl Drawing {
                 ))
             };
         }
-        let taken = self.table_handles(kind).into_iter().any(|h| {
-            matches!(self.objects.get(&h), Some(Object::Other { object, .. })
-                if object.table_entry().is_some_and(|e| names_eq(&e.name, name)))
-        });
-        if taken {
+        if !self.table_named(kind, name).is_empty() {
             return Err(invalid(
                 None,
                 format!("the {kind:?} table already has an entry named {name:?}"),
@@ -1310,9 +1547,9 @@ impl Drawing {
     /// entries, layouts) or that own other objects (a group, sort table or
     /// other object listing entities, an image definition reactor, a
     /// dictionary that already has entries: add it empty, then its
-    /// entries), common
-    /// data with an extension dictionary, and an object that cannot be
-    /// encoded as R2018. A reference to a missing object is
+    /// entries), and common data with an extension dictionary. An object
+    /// that cannot be encoded as R2018 (its extended data included) is
+    /// [`Error::Encode`]; a reference to a missing object is
     /// [`Error::NotFound`]. On error nothing changes.
     pub fn add_object(
         &mut self,
@@ -1320,24 +1557,47 @@ impl Drawing {
         name: &str,
         object: NonGraphical,
     ) -> Result<Handle> {
-        let entries = match self.objects.get(&dictionary) {
+        self.sync_index();
+        let new = self.new_dictionary_entry(dictionary, name, object, || self.next_handle())?;
+        let h = new.obj.handle();
+        self.header.handseed = new.seed;
+        self.objects.insert(h, new.obj);
+        self.classes.extend(new.classes);
+        if let Some(d) = self
+            .objects
+            .get_mut(&dictionary)
+            .and_then(Object::dictionary_mut)
+        {
+            d.entries.push((name.to_owned(), h));
+        }
+        let state = self.ref_index.get_mut();
+        state.added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
+        state.name_added_to_dictionary(dictionary, fold_name(name), h);
+        Ok(h)
+    }
+
+    /// The entry `name` of `dictionary`, owned by it and naming it among
+    /// its reactors, under the handle `alloc` gives (with the seed after
+    /// it), and the classes the drawing lacks for it, checked as
+    /// [`Drawing::add_object`] adds it: the drawing does not change.
+    pub(super) fn new_dictionary_entry(
+        &self,
+        dictionary: Handle,
+        name: &str,
+        object: NonGraphical,
+        alloc: impl FnOnce() -> Result<(Handle, Handle)>,
+    ) -> Result<NewObject> {
+        match self.objects.get(&dictionary) {
             None => return Err(Error::NotFound(dictionary)),
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            }) => &d.entries,
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => &d.dictionary.entries,
+            Some(o) if o.dictionary().is_some() => {}
             Some(_) => {
                 return Err(invalid(
                     Some(dictionary),
                     format!("{dictionary} is not a dictionary"),
                 ));
             }
-        };
-        if name.is_empty() || entries.iter().any(|(n, _)| names_eq(n, name)) {
+        }
+        if name.is_empty() || !self.dictionary_named(dictionary, name).is_empty() {
             return Err(invalid(
                 Some(dictionary),
                 format!("the dictionary already has an entry named {name:?}, or it is empty"),
@@ -1351,11 +1611,7 @@ impl Drawing {
             | NonGraphical::SpatialIndex(_)
             | NonGraphical::LayerIndex(_)
             | NonGraphical::ImageDefReactor(_) => true,
-            NonGraphical::Dictionary(d)
-            | NonGraphical::DictionaryWithDefault(DictionaryWithDefault {
-                dictionary: d, ..
-            }) => !d.entries.is_empty(),
-            _ => false,
+            o => o.dictionary().is_some_and(|d| !d.entries.is_empty()),
         };
         if refused {
             return Err(invalid(
@@ -1366,9 +1622,7 @@ impl Drawing {
                  entries: add an empty dictionary, then its entries",
             ));
         }
-        self.sync_index();
-        let seed = self.header.handseed;
-        let h = self.alloc_handle()?;
+        let (h, seed) = alloc()?;
         let obj = Object::Other {
             common: ObjectCommon {
                 handle: h,
@@ -1378,33 +1632,14 @@ impl Drawing {
             },
             object,
         };
-        let classes = self
-            .check_new(&obj, &[h])
-            .and_then(|()| self.missing_classes(std::slice::from_ref(&obj)));
-        let classes = match classes {
-            Ok(c) => c,
-            Err(e) => {
-                self.header.handseed = seed;
-                return Err(e);
-            }
-        };
-        self.objects.insert(h, obj);
-        self.classes.extend(classes);
-        match self.objects.get_mut(&dictionary) {
-            Some(Object::Other {
-                object: NonGraphical::Dictionary(d),
-                ..
-            }) => d.entries.push((name.to_owned(), h)),
-            Some(Object::Other {
-                object: NonGraphical::DictionaryWithDefault(d),
-                ..
-            }) => d.dictionary.entries.push((name.to_owned(), h)),
-            _ => {}
-        }
-        self.ref_index
-            .get_mut()
-            .added(&self.objects, &[h], &[(dictionary, h, SOFT_OWNER)]);
-        Ok(h)
+        self.check_new(&obj, &[h])?;
+        let classes = self.missing_classes(std::slice::from_ref(&obj))?;
+        Ok(NewObject {
+            obj,
+            seed,
+            list: dictionary,
+            classes,
+        })
     }
 
     /// Add a layer to the layer table; see [`Drawing::add_entity`] for what
@@ -1565,11 +1800,13 @@ impl Drawing {
         {
             c.entries.push(record);
         }
-        self.ref_index.get_mut().added(
+        let state = self.ref_index.get_mut();
+        state.added(
             &self.objects,
             &[record, begin, end],
             &[(control, record, SOFT_OWNER)],
         );
+        state.name_added_to_table(control, Some(fold_name(name)), record);
         Ok(record)
     }
 
@@ -1885,8 +2122,14 @@ impl Drawing {
         for (&r, (xs, _)) in &plan {
             if let Some(obj) = self.objects.get_mut(&r) {
                 detach(obj, xs);
-                state.detached += 1;
+                #[cfg(test)]
+                {
+                    state.detached += 1;
+                }
             }
+            // Its list (a table control's or dictionary's) may have lost an
+            // entry.
+            state.forget_names(r);
         }
         for &x in &set {
             let block = match self.objects.get(&x) {
@@ -1896,6 +2139,7 @@ impl Drawing {
             if let Some(block) = block {
                 state.forget_inserts(block);
             }
+            state.forget_names(x);
         }
         let mut removed: BTreeMap<Handle, Object> = BTreeMap::new();
         for &x in &set {
@@ -2072,7 +2316,7 @@ fn list_entries_only(obj: &Object, x: Handle) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::{Dictionary, Line, XDataItem};
+    use crate::object::{Dictionary, Line, XDataItem, type_refs};
     use crate::section::HeaderVars;
 
     fn drawing(objects: impl IntoIterator<Item = (u64, NonGraphical)>) -> Drawing {
@@ -2147,8 +2391,60 @@ mod tests {
         .unwrap()
     }
 
-    /// The index kept up to date equals one built afresh.
+    /// The name index kept up to date equals one built afresh: each list it
+    /// holds (a table control or dictionary) maps the names its entries have
+    /// now to those entries, in list order; each table entry indexed names
+    /// its control among its holders, and no entry has more holders than
+    /// there are tables.
+    fn assert_names_fresh(d: &Drawing) {
+        let state = d.ref_index.lock();
+        for (&list, kept) in &state.names {
+            // The named entries, and (for a table) every listed handle,
+            // named or not: each must hold the control's names.
+            let (entries, listed): (Vec<(String, Handle)>, Vec<Handle>) = match d.objects.get(&list)
+            {
+                Some(Object::Other {
+                    object: NonGraphical::TableControl(c),
+                    ..
+                }) => {
+                    let listed = d.table_handles(c.kind);
+                    let entries = listed
+                        .iter()
+                        .filter_map(|&h| match d.objects.get(&h) {
+                            Some(Object::Other { object, .. }) => {
+                                Some((object.table_entry()?.name.clone(), h))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    (entries, listed)
+                }
+                o => match o.and_then(Object::dictionary) {
+                    Some(x) => (x.entries.clone(), Vec::new()),
+                    None => panic!("{list} is indexed by name but is no list"),
+                },
+            };
+            let mut fresh: HashMap<String, Vec<Handle>> = HashMap::new();
+            for (n, h) in &entries {
+                fresh.entry(fold_name(n)).or_default().push(*h);
+            }
+            assert_eq!(kept, &fresh, "the names of {list} are stale");
+            for h in &listed {
+                assert!(
+                    state.name_holders.get(h).is_some_and(|c| c.contains(&list)),
+                    "{h} does not name {list} among its holders"
+                );
+            }
+        }
+        for (h, holders) in &state.name_holders {
+            assert!(holders.len() <= TableKind::ALL.len(), "{h}: {holders:?}");
+        }
+    }
+
+    /// The index kept up to date equals one built afresh (the name index
+    /// too, see [`assert_names_fresh`]).
     fn assert_index_fresh(d: &Drawing) {
+        assert_names_fresh(d);
         let kept = d.ref_index.lock().ensure(&d.objects).snapshot();
         let mut fresh = IndexState::default();
         let fresh = fresh.ensure(&d.objects).snapshot();
@@ -2169,6 +2465,23 @@ mod tests {
                 kept.1 == fresh.1,
                 kept.2 == fresh.2
             );
+        }
+    }
+
+    /// A seed above the largest handle is kept; one at or below it moves
+    /// just past it, and with the largest possible handle taken becomes that
+    /// handle (the handles are used up).
+    #[test]
+    fn normalised_seed_moves_past_the_last_handle() {
+        for (seed, last, want) in [
+            (5, None, 5),
+            (5, Some(3), 5),
+            (4, Some(4), 5),
+            (1, Some(9), 10),
+            (1, Some(u64::MAX), u64::MAX),
+        ] {
+            let got = normalised_seed(Handle(seed), last.map(Handle));
+            assert_eq!(got, Handle(want), "{seed} {last:?}");
         }
     }
 
@@ -2265,6 +2578,318 @@ mod tests {
             assert_index_fresh(&d);
         }
         assert_eq!(deltas[0], deltas[1], "independent of the drawing's size");
+    }
+
+    /// Adding k layers to a table of 100 or of 1000 reads the table's names
+    /// once (the first lookup), whatever its size: a name check is a hash
+    /// lookup, not a scan of the table, and so is `layer_by_name`. The work
+    /// counted is the table entries read, so a lookup that scans the table
+    /// (however it is written) is caught, not only one that rebuilds the
+    /// index.
+    #[test]
+    fn name_checks_are_independent_of_the_table_size() {
+        let k = 50;
+        let mut work = vec![];
+        for size in [100, 1000] {
+            let mut d = Drawing::new();
+            for i in 0..size {
+                d.add_layer(Layer::new(&format!("L{i}"))).unwrap();
+            }
+            let scans = d.ref_index.lock().name_scans;
+            let read = TABLE_ENTRIES_READ.get();
+            for i in 0..k {
+                d.add_layer(Layer::new(&format!("M{i}"))).unwrap();
+                assert!(d.layer_by_name(&format!("m{i}")).is_some());
+            }
+            assert!(d.add_layer(Layer::new("l7")).is_err());
+            work.push((
+                d.ref_index.lock().name_scans - scans,
+                TABLE_ENTRIES_READ.get() - read,
+            ));
+        }
+        assert_eq!(work[0], work[1], "independent of the table's size");
+        assert_eq!(work[0], (0, 0), "no table read once indexed");
+    }
+
+    /// The name index follows every change: a table entry renamed through
+    /// `layer_mut` (its old name is free, its new one taken), a removed
+    /// table entry or dictionary entry (its name free), a list changed
+    /// through `get_mut`, and dictionary entries compare without case.
+    #[test]
+    fn name_index_follows_changes() {
+        let mut d = Drawing::new();
+        let a = d.add_layer(Layer::new("A")).unwrap();
+        assert!(d.add_layer(Layer::new("a")).is_err());
+        d.layer_mut(a).unwrap().entry.name = "B".into();
+        assert_eq!(d.layer_by_name("b"), Some(a));
+        assert!(d.add_layer(Layer::new("b")).is_err());
+        let a2 = d.add_layer(Layer::new("a")).unwrap();
+        d.remove(a2).unwrap();
+        assert_eq!(d.layer_by_name("A"), None);
+        d.add_layer(Layer::new("A")).unwrap();
+        // A list emptied by hand through `get_mut`.
+        let control = d.header.layer_control;
+        let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = d.get_mut(control)
+        else {
+            panic!("the layer control");
+        };
+        let kept = c.entries.clone();
+        c.entries.retain(|&h| h != a);
+        assert_eq!(d.layer_by_name("B"), None);
+        if let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = d.get_mut(control)
+        {
+            c.entries = kept;
+        }
+        assert_eq!(d.layer_by_name("B"), Some(a));
+        // Dictionary entries.
+        let nod = d.named_objects();
+        let x = d
+            .add_object(
+                nod,
+                "MY_DICT",
+                NonGraphical::Dictionary(Dictionary::default()),
+            )
+            .unwrap();
+        let dup = d.add_object(
+            nod,
+            "my_dict",
+            NonGraphical::Dictionary(Dictionary::default()),
+        );
+        assert!(dup.is_err());
+        d.remove(x).unwrap();
+        d.add_object(
+            nod,
+            "my_dict",
+            NonGraphical::Dictionary(Dictionary::default()),
+        )
+        .unwrap();
+        // A dictionary with a default entry is indexed as a dictionary.
+        let with_default = d
+            .add_object(
+                nod,
+                "WITH_DEFAULT",
+                NonGraphical::DictionaryWithDefault(DictionaryWithDefault {
+                    dictionary: Dictionary::default(),
+                    default_entry: Handle(0),
+                }),
+            )
+            .unwrap();
+        let empty = || NonGraphical::Dictionary(Dictionary::default());
+        let e = d.add_object(with_default, "Entry", empty()).unwrap();
+        assert!(d.add_object(with_default, "ENTRY", empty()).is_err());
+        assert_eq!(d.dictionary_named(with_default, "entry"), [e]);
+        if let Some(dict) = d.get_mut(with_default).and_then(Object::dictionary_mut) {
+            dict.entries[0].0 = "Renamed".into();
+        }
+        assert!(d.dictionary_named(with_default, "entry").is_empty());
+        assert_eq!(d.dictionary_named(with_default, "RENAMED"), [e]);
+        d.add_object(with_default, "entry", empty()).unwrap();
+        assert_index_fresh(&d);
+    }
+
+    /// A table entry listed without a name (a placeholder) and later
+    /// changed into a named entry through `get_mut` is found by its name:
+    /// the index forgets the table's names when any listed entry changes,
+    /// named or not.
+    #[test]
+    fn unnamed_table_entry_retyped_is_found() {
+        let mut d = Drawing::new();
+        let nod = d.named_objects();
+        let p = d.add_object(nod, "P", NonGraphical::Placeholder).unwrap();
+        let control = d.header.layer_control;
+        if let Some(Object::Other {
+            object: NonGraphical::TableControl(c),
+            ..
+        }) = d.get_mut(control)
+        {
+            c.entries.push(p);
+        }
+        assert_eq!(d.layer_by_name("Q"), None);
+        if let Some(Object::Other { object, .. }) = d.get_mut(p) {
+            *object = NonGraphical::Layer(Layer::new("Q"));
+        }
+        assert_eq!(d.layer_by_name("q"), Some(p));
+        assert!(d.add_layer(Layer::new("Q")).is_err());
+        assert_index_fresh(&d);
+    }
+
+    /// Renaming entries and looking names up in turn rescans the table each
+    /// time, but an entry left alone stays held by its one control: the
+    /// holders do not grow with the rescans.
+    #[test]
+    fn name_holders_stay_bounded_through_rescans() {
+        let mut d = Drawing::new();
+        let layers: Vec<Handle> = (0..50)
+            .map(|i| d.add_layer(Layer::new(&format!("L{i}"))).unwrap())
+            .collect();
+        let untouched = d.layer_by_name("0").unwrap();
+        let before = d.ref_index.lock().name_scans;
+        for (i, &h) in layers.iter().enumerate() {
+            d.layer_mut(h).unwrap().entry.name = format!("Renamed{i}");
+            assert_eq!(d.layer_by_name(&format!("renamed{i}")), Some(h));
+        }
+        let state = d.ref_index.lock();
+        assert_eq!(
+            state.name_scans - before,
+            layers.len(),
+            "a rescan per rename"
+        );
+        assert_eq!(state.name_holders[&untouched].len(), 1);
+        let total: usize = state.name_holders.values().map(BTreeSet::len).sum();
+        assert!(total <= d.objects.len(), "{total} holder entries");
+        drop(state);
+        assert_index_fresh(&d);
+    }
+
+    /// Extended data that cannot be encoded as R2018 (an application with no
+    /// items, a binary chunk over 255 bytes) is refused with
+    /// [`Error::Encode`] for a new entity and a new object, nothing changes,
+    /// and removals still work (an accepted object whose references could
+    /// not be listed would make the index refuse every removal). Extended
+    /// data at the limits (a 255-byte chunk, a string) is accepted.
+    #[test]
+    fn unencodable_extended_data_is_refused() {
+        use crate::object::XDataApp;
+        let mut d = Drawing::new();
+        let kept = line(&mut d, 0);
+        let ms = d.model_space();
+        let l0 = d.layer_by_name("0").unwrap();
+        let app = d
+            .objects
+            .iter()
+            .find(|(_, o)| {
+                matches!(
+                    o,
+                    Object::Other {
+                        object: NonGraphical::AppId(_),
+                        ..
+                    }
+                )
+            })
+            .map(|(&h, _)| h)
+            .unwrap();
+        let bad = [
+            XDataApp {
+                app,
+                items: Vec::new(),
+            },
+            XDataApp {
+                app,
+                items: vec![XDataItem::Binary(vec![0; 256])],
+            },
+        ];
+        let good = [
+            XDataApp {
+                app,
+                items: vec![XDataItem::Binary(vec![0; 255])],
+            },
+            XDataApp {
+                app,
+                items: vec![XDataItem::String("x".into())],
+            },
+        ];
+        let entity = || {
+            Entity::Line(Line {
+                start: [0.0; 3],
+                end: [1.0; 3],
+                thickness: 0.0,
+                extrusion: [0.0, 0.0, 1.0],
+            })
+        };
+        // `add_object` gives a new object empty common data; the check it
+        // runs is the one for an object with this extended data.
+        let object = |handle, xdata: &XDataApp| Object::Other {
+            common: ObjectCommon {
+                handle,
+                xdata: vec![xdata.clone()],
+                ..ObjectCommon::new()
+            },
+            object: NonGraphical::Placeholder,
+        };
+        let says =
+            |e: Option<&Error>| matches!(e, Some(Error::Encode(m)) if m.contains("extended data"));
+        for xdata in bad {
+            let (count, seed) = (d.objects.len(), d.header.handseed);
+            let mut common = EntityCommon::new(l0);
+            common.obj.xdata = vec![xdata.clone()];
+            let added = d.add_entity(ms, common, entity());
+            assert!(says(added.as_ref().err()), "{xdata:?}: {added:?}");
+            assert_eq!((d.objects.len(), d.header.handseed), (count, seed));
+            let checked = d.check_new(&object(seed, &xdata), &[seed]);
+            assert!(says(checked.as_ref().err()), "{xdata:?}: {checked:?}");
+        }
+        for xdata in good {
+            let seed = d.header.handseed;
+            d.check_new(&object(seed, &xdata), &[seed]).unwrap();
+            let mut common = EntityCommon::new(l0);
+            common.obj.xdata = vec![xdata.clone()];
+            let h = d.add_entity(ms, common, entity()).unwrap();
+            assert_eq!(d.get(h).unwrap().object_common().xdata, [xdata]);
+        }
+        d.remove(kept).unwrap();
+        assert!(d.get(kept).is_none());
+    }
+
+    /// Adding a polyline of n vertices compares O(n log n) new handles in
+    /// all, not O(n²): each child's references are looked up among the
+    /// family's new handles by binary search. From 1k to 10k vertices the
+    /// comparisons grow about 13 times (a scan of the new handles per
+    /// reference grows them 100 times).
+    #[test]
+    fn adding_a_long_polyline_is_linear() {
+        use crate::object::{Polyline3d, Vertex3d};
+        let probes = |n: usize| {
+            let mut d = Drawing::new();
+            let ms = d.model_space();
+            let l0 = d.layer_by_name("0").unwrap();
+            let poly = Entity::Polyline3d(Polyline3d {
+                spline_flags: 0,
+                closed_flags: 0,
+                vertices: EntityList::Owned(Vec::new()),
+                seqend: Handle(0),
+            });
+            let before = d.objects.len();
+            let vertices = (0..n)
+                .map(|i| {
+                    let vertex = Vertex3d {
+                        flags: 32,
+                        point: [i as f64, 0.0, 0.0],
+                    };
+                    (EntityCommon::new(l0), Entity::Vertex3d(vertex))
+                })
+                .collect();
+            let at = |d: &Drawing| {
+                let s = d.ref_index.lock();
+                (s.pending_probes, s.pending_lookups)
+            };
+            let start = at(&d);
+            d.add_polyline(ms, (EntityCommon::new(l0), poly), vertices)
+                .unwrap();
+            assert_eq!(d.objects.len(), before + n + 2);
+            let end = at(&d);
+            let (probes, lookups) = (end.0 - start.0, end.1 - start.1);
+            // Every question about the new handles is a binary search over
+            // the family's n + 2: about log2(n + 2) comparisons each, one
+            // more for the halving's remainder and one for the last.
+            let per = (n + 2).ilog2() as usize + 2;
+            assert!(
+                lookups > 0 && probes <= lookups * per,
+                "{probes} > {lookups} x {per}"
+            );
+            probes
+        };
+        let (small, large) = (probes(1_000), probes(10_000));
+        assert!(small > 0);
+        assert!(
+            large < 20 * small,
+            "{small} comparisons for 1k vertices, {large} for 10k"
+        );
     }
 
     /// Removing k entities at once from a block of 1k or of 100k entities
@@ -2439,7 +3064,7 @@ mod tests {
         let mut layers: Vec<Handle> = vec![l0];
         let (mut ok, mut refused) = (0, 0);
         // Successes per operation (arms 0 and 1 are one operation).
-        let mut done = [0usize; 12];
+        let mut done = [0usize; 13];
         d.referrers(ms);
         for step in 0..400 {
             let layer = rng.pick(&layers).unwrap_or(l0);
@@ -2457,7 +3082,7 @@ mod tests {
                     .map(|_| (EntityCommon::new(layer), attrib.clone()))
                     .collect::<Vec<_>>()
             };
-            let arm = rng.below(12);
+            let arm = rng.below(13);
             let result: Result<Handle> = match arm {
                 0 | 1 => {
                     let into = rng
@@ -2617,6 +3242,22 @@ mod tests {
                     Some(h) if d.objects.contains_key(&h) => d.remove(h).map(|_| h),
                     _ => continue,
                 },
+                12 => {
+                    // A layer renamed through layer_mut, then looked up by
+                    // its new name (without case) and by its old one.
+                    // Not layer 0, which the other operations look up.
+                    let Some(target) = rng.pick(&layers[1..]) else {
+                        continue;
+                    };
+                    let Some(l) = d.layer_mut(target) else {
+                        continue;
+                    };
+                    let old = std::mem::replace(&mut l.entry.name, format!("Renamed{step}"));
+                    assert_eq!(d.layer_by_name(&format!("RENAMED{step}")), Some(target));
+                    assert_ne!(d.layer_by_name(&old), Some(target));
+                    done[12] += 1;
+                    continue;
+                }
                 _ => {
                     let h = rng.pick(&originals).unwrap();
                     if !d.objects.contains_key(&h) {

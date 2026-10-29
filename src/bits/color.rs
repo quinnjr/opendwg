@@ -39,8 +39,9 @@ pub enum Color {
     /// 0xC8000000). It is meaningful where a color may be absent: the corpus
     /// has it as a table style cell's background (no fill), and an R2000
     /// MULTILEADER's text background as the ACI index 257. ODS does not list
-    /// the method. It has no ENC (entity color) or pre-R2004 form;
-    /// writing it there is an error.
+    /// the method. A pre-R2004 CMC index 257 is read as it, but it is not
+    /// written in that form: writing it as a pre-R2004 CMC is an error, and
+    /// it has no ENC (entity color) form at all.
     None,
 }
 

@@ -240,6 +240,9 @@ impl Drawing {
         if let Some(block) = block {
             state.forget_inserts(block);
         }
+        // The name index: a table control's or dictionary's list, or a
+        // table entry's name, may change.
+        state.forget_names(h);
         self.objects.get_mut(&h)
     }
 
@@ -516,13 +519,30 @@ fn resolve_mline_style_linetypes(objects: &mut BTreeMap<Handle, Object>) {
     }
 }
 
+/// Objects by handle: a drawing's, or those plus the objects the writer adds
+/// (see `Changes::stored`), for the passes that read either.
+pub(crate) trait ObjectSet {
+    /// Object `h`.
+    fn object(&self, h: Handle) -> Option<&Object>;
+    /// Every object, in handle order.
+    fn each(&self) -> impl Iterator<Item = (Handle, &Object)>;
+}
+
+impl ObjectSet for BTreeMap<Handle, Object> {
+    fn object(&self, h: Handle) -> Option<&Object> {
+        self.get(&h)
+    }
+
+    fn each(&self) -> impl Iterator<Item = (Handle, &Object)> {
+        self.iter().map(|(&h, o)| (h, o))
+    }
+}
+
 /// The handle of each VIEW, by lowercase name.
-pub(crate) fn views_by_name(
-    objects: &BTreeMap<Handle, Object>,
-) -> std::collections::HashMap<String, Handle> {
+pub(crate) fn views_by_name(objects: &impl ObjectSet) -> std::collections::HashMap<String, Handle> {
     objects
-        .iter()
-        .filter_map(|(&h, o)| match o {
+        .each()
+        .filter_map(|(h, o)| match o {
             Object::Other {
                 object: NonGraphical::View(v),
                 ..
@@ -566,14 +586,11 @@ fn resolve_plot_view_names(objects: &mut BTreeMap<Handle, Object>) {
 /// The VIEWPORT entities of block record `block`, in its entity order, or
 /// `None` when it is not a block record with a built entity list. A
 /// layout's viewport list holds these (checked on the corpus).
-pub(crate) fn block_viewports(
-    objects: &BTreeMap<Handle, Object>,
-    block: Handle,
-) -> Option<Vec<Handle>> {
+pub(crate) fn block_viewports(objects: &impl ObjectSet, block: Handle) -> Option<Vec<Handle>> {
     let Some(Object::Other {
         object: NonGraphical::BlockRecord(b),
         ..
-    }) = objects.get(&block)
+    }) = objects.object(block)
     else {
         return None;
     };
@@ -585,7 +602,7 @@ pub(crate) fn block_viewports(
             .copied()
             .filter(|h| {
                 matches!(
-                    objects.get(h),
+                    objects.object(*h),
                     Some(Object::Entity {
                         entity: Entity::Viewport(_),
                         ..
@@ -604,11 +621,11 @@ pub(crate) fn block_viewports(
 /// lists are linear in the objects. Layouts their block does not name back
 /// are left out.
 pub(crate) fn own_layout_viewports(
-    objects: &BTreeMap<Handle, Object>,
+    objects: &impl ObjectSet,
 ) -> (Vec<(Handle, Vec<Handle>)>, usize) {
     let mut steps = 0;
     let mut out = Vec::new();
-    for (&h, o) in objects {
+    for (h, o) in objects.each() {
         let Object::Other {
             object: NonGraphical::Layout(l),
             ..
@@ -619,7 +636,7 @@ pub(crate) fn own_layout_viewports(
         let Some(Object::Other {
             object: NonGraphical::BlockRecord(b),
             ..
-        }) = objects.get(&l.block_record)
+        }) = objects.object(l.block_record)
         else {
             continue;
         };

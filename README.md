@@ -88,12 +88,14 @@ return those warnings with the file, and `Drawing::write_diagnostics` lists
 them before saving. `to_bytes` and `save` write the same file without them.
 The writer also adds what AutoCAD requires and other programs' files lack
 (the dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
-dictionaries), sets a null owner to the object that lists it, and gives an
-entity the block that lists it as owner, each with a warning; the drawing
-itself is not changed. `Drawing::validate` checks ownership,
-references, handles and required tables; the writer runs it before every
-save. `Drawing::remove` refuses to delete an object something still refers
-to (`Error::InUse`).
+dictionaries), sets a null owner to the one object that lists it, and gives
+an entity the block that lists it as owner, each with a warning; the drawing
+itself is not changed. An object two objects list keeps its null owner
+(which one owns it is not known): validation refuses it, but only warns
+when the object, or every object listing it, is kept raw. `Drawing::validate`
+checks ownership, references, handles and required tables; the writer runs it
+before every save. `Drawing::remove` refuses to delete an object something
+still refers to (`Error::InUse`).
 
 ## Objects that cannot be converted
 
@@ -261,6 +263,11 @@ OPENDWG_REQUIRE_CORPUS=1 cargo test --release -- --include-ignored
 
 The ignored tests are the slow ones, such as the 200,000-entity round trip
 (`large_drawing_roundtrip_is_linear`), meant for release builds.
+
+`scripts/check-msrv.sh` builds the library, tests and examples, with and
+without `serde`, on the crate's `rust-version` (1.85) with warnings as
+errors: newer syntax such as let chains does not build there. It needs that
+toolchain (`rustup toolchain install 1.85`).
 
 ### Fuzzing
 

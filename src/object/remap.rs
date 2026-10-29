@@ -109,7 +109,7 @@ pub(crate) fn clears_offset(r: HandleRef, base: Handle, new_base: Handle) -> boo
 ///   mapped and the code kept;
 /// - codes 6, 8, 0xA and 0xC are offsets from `base`: kept while neither
 ///   `base` nor the target changes, otherwise written as the absolute
-///   target with code 4. ODS: an offset handle "always represent[s] a soft
+///   target with code 4. ODS: an offset handle "always represent\[s\] a soft
 ///   pointer reference", so code 4 (soft pointer) keeps its meaning;
 /// - an offset that does not resolve is kept while `base` stays, and
 ///   otherwise becomes a null soft pointer (it would name an unrelated

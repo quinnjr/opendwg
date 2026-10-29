@@ -32,12 +32,15 @@
 //!   when the owner is a dictionary (its entries are soft owner references,
 //!   and AutoCAD's own files have objects their owner dictionary does not
 //!   list) or either is a raw object (a class the library does not model,
-//!   whose ownership semantics are unknown: Civil 3D's AECC styles);
+//!   whose ownership semantics are unknown: Civil 3D's AECC styles) and the
+//!   object is not an entity;
 //! - an object listed as owned (a hard owner reference, an entity list, a
 //!   table control's entry, a hard-owner dictionary's entry, an extension
 //!   dictionary) whose owner is another object, but when either is a raw
-//!   object (a null owner of a modelled object the writer sets instead, see
-//!   `drawing::write`);
+//!   object and the listed object is not an entity (an entity's owner and
+//!   the block list it is in are always checked); a null owner of a
+//!   modelled object exactly one object lists the writer sets instead, see
+//!   `drawing::write`;
 //! - a missing required table, record or dictionary: the nine table controls,
 //!   layer `0`, linetypes `ByLayer`, `ByBlock` and `Continuous`, text style
 //!   and dimension style `Standard`, application `ACAD`, block records
@@ -96,7 +99,9 @@
 use std::collections::{HashMap, HashSet};
 
 use super::Drawing;
+use super::api::{first_dictionary, names_eq};
 use super::refs::{RefIndex, object_refs};
+use super::repair::RepairNote;
 use super::write::{Changes, WriteWork};
 use crate::diag::{Diagnostic, Severity};
 #[cfg(doc)]
@@ -108,6 +113,7 @@ use crate::object::{
     ClassIndex, Entity, EntityList, LinetypeRef, MInsert, NonGraphical, Object, TableControl,
     TableKind, XRecordValue, written_type_code,
 };
+use crate::section::HeaderVars;
 use crate::section::classes::FIRST_CLASS_NUMBER;
 use crate::section::header::handle_vars;
 
@@ -234,27 +240,7 @@ fn is_kind(obj: &Object, kind: &str) -> bool {
 }
 
 fn is_dictionary(obj: &Object) -> bool {
-    matches!(
-        obj,
-        Object::Other {
-            object: NonGraphical::Dictionary(_) | NonGraphical::DictionaryWithDefault(_),
-            ..
-        }
-    )
-}
-
-fn dictionary_entries(obj: &Object) -> Option<(&[(String, Handle)], bool)> {
-    match obj {
-        Object::Other {
-            object: NonGraphical::Dictionary(d),
-            ..
-        } => Some((&d.entries, d.is_hard_owner())),
-        Object::Other {
-            object: NonGraphical::DictionaryWithDefault(d),
-            ..
-        } => Some((&d.dictionary.entries, d.dictionary.is_hard_owner())),
-        _ => None,
-    }
+    obj.dictionary().is_some()
 }
 
 impl Drawing {
@@ -266,14 +252,14 @@ impl Drawing {
     pub fn validate(&self) -> Vec<Diagnostic> {
         // Required objects the writer adds (see `drawing::repair`) are
         // warnings; the drawing is checked with them.
-        if let Some((repaired, mut found)) = self.repaired() {
-            found.extend(repaired.validate());
+        let changes = self.refreshed(&mut WriteWork::default());
+        let mut found = self.validate_written(&changes, &mut 0);
+        if !changes.repairs.is_empty() {
+            found.extend(changes.repairs.iter().map(RepairNote::diagnostic).cloned());
             found.sort_by(|a, b| (a.handle, &a.message).cmp(&(b.handle, &b.message)));
             found.dedup();
-            return found;
         }
-        let changes = self.refreshed(&mut WriteWork::default());
-        self.validate_written(&changes, &mut 0)
+        found
     }
 
     /// [`Drawing::validate`] with the writer's `changes`, counting the
@@ -281,8 +267,8 @@ impl Drawing {
     pub(super) fn validate_written(&self, changes: &Changes, work: &mut usize) -> Vec<Diagnostic> {
         let mut state = self.ref_index.lock();
         let index = state.ensure(&self.objects);
-        let replaced = changes
-            .replaced
+        let overlay = changes
+            .overlay
             .iter()
             .map(|(&h, o)| {
                 let refs = object_refs(o).0;
@@ -298,17 +284,16 @@ impl Drawing {
                 )
             })
             .collect();
-        let unconvertible: HashSet<Handle> = self
-            .objects
-            .keys()
-            .filter(|&&h| changes.get(self, h).is_some_and(|o| !o.is_convertible()))
-            .copied()
+        let unconvertible: HashSet<Handle> = changes
+            .handles(self)
+            .filter(|&h| changes.get(self, h).is_some_and(|o| !o.is_convertible()))
             .collect();
         let mut v = Validator {
             d: self,
+            header: changes.header(self),
             changes,
             index,
-            replaced,
+            overlay,
             model_space: self.model_space(),
             unconvertible: &unconvertible,
             out: Vec::new(),
@@ -344,11 +329,13 @@ struct CopyRefs {
 /// The drawing as it will be written, and the findings.
 struct Validator<'a> {
     d: &'a Drawing,
+    /// The header as written (see [`Changes::header`]).
+    header: &'a HeaderVars,
     changes: &'a Changes,
     index: &'a RefIndex,
     /// The references of the writer's copies (the index has the objects'
     /// as they are), as a list and a set of targets.
-    replaced: HashMap<Handle, CopyRefs>,
+    overlay: HashMap<Handle, CopyRefs>,
     model_space: Handle,
     /// The objects that cannot be written as R2018 (raw objects of R2000 and
     /// R2004, ...; see [`Drawing::unconvertible_objects`]): the writer
@@ -387,10 +374,10 @@ impl<'a> Validator<'a> {
     /// as R2018 (see [`Validator::unconvertible`]).
     fn objects(&self) -> impl Iterator<Item = (Handle, &'a Object)> + 'a {
         let (d, changes, skip) = (self.d, self.changes, self.unconvertible);
-        d.objects
-            .keys()
+        changes
+            .handles(d)
             .filter(move |h| !skip.contains(h))
-            .filter_map(move |&h| changes.get(d, h).map(|o| (h, o)))
+            .filter_map(move |h| changes.get(d, h).map(|o| (h, o)))
     }
 
     /// The classes: numbers from 500 and each used once, and each object of
@@ -475,7 +462,7 @@ impl<'a> Validator<'a> {
 
     /// The references of `h` (see `drawing::refs::object_refs`).
     fn refs(&self, h: Handle) -> &[(Handle, u8)] {
-        match self.replaced.get(&h) {
+        match self.overlay.get(&h) {
             Some(c) => &c.refs,
             None => self.index.refs_of(h),
         }
@@ -483,7 +470,7 @@ impl<'a> Validator<'a> {
 
     /// Whether `from` refers to `to`.
     fn refers(&self, from: Handle, to: Handle) -> bool {
-        match self.replaced.get(&from) {
+        match self.overlay.get(&from) {
             Some(c) => c.targets.contains(&to),
             None => self.index.refers(from, to),
         }
@@ -491,7 +478,7 @@ impl<'a> Validator<'a> {
 
     /// Whether `holder` names `r` among its reactors (one lookup).
     fn has_reactor(&self, holder: Handle, r: Handle) -> bool {
-        match self.replaced.get(&holder) {
+        match self.overlay.get(&holder) {
             Some(c) => c.reactors.contains(&r),
             None => self.index.holds_reactor(holder, r),
         }
@@ -503,7 +490,7 @@ impl<'a> Validator<'a> {
         match obj {
             Object::Entity { common, .. } => match common.entmode {
                 0 => common.obj.owner,
-                1 => self.d.header.block_record_paper_space,
+                1 => self.header.block_record_paper_space,
                 2 => self.model_space,
                 _ => Handle(0),
             },
@@ -513,7 +500,7 @@ impl<'a> Validator<'a> {
 
     /// Objects stored under the handle they give, below the seed.
     fn handles(&mut self) {
-        let seed = self.d.next_handseed();
+        let seed = self.d.next_handseed(self.changes);
         for (h, obj) in self.objects() {
             self.work += 1;
             let own = obj.handle();
@@ -735,9 +722,9 @@ impl<'a> Validator<'a> {
                     EntityList::Owned(v) => (v.clone(), "an attribute"),
                     EntityList::Linked { .. } => (Vec::new(), ""),
                 },
-                o => match dictionary_entries(o) {
-                    Some((entries, true)) => (
-                        entries.iter().map(|&(_, e)| e).collect(),
+                o => match o.dictionary() {
+                    Some(d) if d.is_hard_owner() => (
+                        d.entries.iter().map(|&(_, e)| e).collect(),
                         "a hard-owner dictionary entry",
                     ),
                     _ => (Vec::new(), ""),
@@ -977,7 +964,7 @@ impl<'a> Validator<'a> {
 
     /// The table control of `kind` named by the header, if it is one.
     fn control(&self, kind: TableKind) -> Option<(Handle, &'a TableControl)> {
-        let h = &self.d.header;
+        let h = self.header;
         let control = match kind {
             TableKind::Block => h.block_control,
             TableKind::Layer => h.layer_control,
@@ -1103,8 +1090,8 @@ impl<'a> Validator<'a> {
     /// The named object dictionary, its required entries, and the model
     /// and paper space layouts.
     fn named_objects(&mut self) {
-        let nod = self.d.header.dict_named_objects;
-        let Some((entries, _)) = self.get(nod).and_then(dictionary_entries) else {
+        let nod = self.header.dict_named_objects;
+        let Some(entries) = self.get(nod).and_then(|o| Some(&o.dictionary()?.entries)) else {
             self.error(
                 None,
                 format!("the named object dictionary {nod} (header) is not a dictionary"),
@@ -1114,14 +1101,19 @@ impl<'a> Validator<'a> {
         let name = self.name(nod);
         let mut layouts = None;
         for required in NAMED_OBJECTS {
-            let entry = entries.iter().find(|(n, _)| n == required).map(|&(_, h)| h);
-            match entry.and_then(|h| self.get(h).map(|o| (h, o))) {
-                Some((h, o)) if is_dictionary(o) => {
+            // Keys compare without case, as AutoCAD looks them up; an
+            // entry of the name that is no dictionary is passed over.
+            let named = entries
+                .iter()
+                .filter(|(n, _)| names_eq(n, required))
+                .map(|&(_, h)| h);
+            match first_dictionary(named, |h| self.get(h)) {
+                Some(h) => {
                     if required == "ACAD_LAYOUT" {
                         layouts = Some(h);
                     }
                 }
-                _ => self.error(
+                None => self.error(
                     Some(nod),
                     format!("{name}: the named object dictionary has no {required} dictionary"),
                 ),
@@ -1130,7 +1122,10 @@ impl<'a> Validator<'a> {
         let Some(layouts) = layouts else {
             return;
         };
-        let Some((entries, _)) = self.get(layouts).and_then(dictionary_entries) else {
+        let Some(entries) = self
+            .get(layouts)
+            .and_then(|o| Some(&o.dictionary()?.entries))
+        else {
             return;
         };
         let blocks: HashSet<Handle> = entries
@@ -1147,7 +1142,7 @@ impl<'a> Validator<'a> {
         let lname = self.name(layouts);
         for (space, block) in [
             ("model space", self.model_space),
-            ("paper space", self.d.header.block_record_paper_space),
+            ("paper space", self.header.block_record_paper_space),
         ] {
             if !blocks.contains(&block) {
                 self.error(
@@ -1161,7 +1156,7 @@ impl<'a> Validator<'a> {
     /// Header handle variables (as written in R2018) name objects of their
     /// kind.
     fn header(&mut self) {
-        let header = &self.d.header;
+        let header = self.header;
         for (var, h, kind) in [
             ("$CLAYER", header.clayer, "LAYER"),
             ("$TEXTSTYLE", header.textstyle, "STYLE"),
@@ -1407,7 +1402,7 @@ mod tests {
         assert!(flag(0x31));
         // The guard itself: written copies that disagree are errors.
         let mut stale = d.refreshed(&mut WriteWork::default());
-        stale.replaced.insert(h, obj);
+        stale.overlay.insert(h, obj);
         let found: Vec<_> = d
             .validate_written(&stale, &mut 0)
             .into_iter()
@@ -1573,6 +1568,60 @@ mod tests {
         assert!(on(&diags, 0x32, Severity::Error).is_empty(), "{diags:#?}");
         assert_eq!(on(&diags, 0x32, Severity::Warning).len(), 2, "{diags:#?}");
         assert_eq!(on(&diags, 0x33, Severity::Error).len(), 1, "{diags:#?}");
+    }
+
+    /// An object with a null owner that two objects list (as their
+    /// extension dictionary) keeps it, which one owns it not being known;
+    /// validation refuses it, but only warns when it, or every object
+    /// listing it, is raw (see `drawing::write`).
+    #[test]
+    fn null_owner_listed_twice_is_a_warning_only_when_raw() {
+        let listing = |h: u64, raw_lister: bool, child: u64| {
+            let (h, mut o) = if raw_lister {
+                raw(h, 0, &[])
+            } else {
+                other(h, 0, NonGraphical::Dictionary(Dictionary::default()))
+            };
+            o.object_common_mut().xdict = Some(Handle(child));
+            (h, o)
+        };
+        let child = |raw_child: bool| {
+            if raw_child {
+                raw(0x50, 0, &[])
+            } else {
+                other(0x50, 0, NonGraphical::Dictionary(Dictionary::default()))
+            }
+        };
+        let findings = |raw_child: bool, raw_listers: [bool; 2]| {
+            let d = drawing([
+                child(raw_child),
+                listing(0x51, raw_listers[0], 0x50),
+                listing(0x52, raw_listers[1], 0x50),
+            ]);
+            let diags: Vec<Diagnostic> = d
+                .validate()
+                .into_iter()
+                .filter(|x| !x.message.contains("no class"))
+                .collect();
+            (
+                on(&diags, 0x50, Severity::Error),
+                on(&diags, 0x50, Severity::Warning),
+            )
+        };
+        // (a) A raw child and raw listers: warnings.
+        let (errors, warnings) = findings(true, [true, true]);
+        assert!(errors.is_empty(), "{errors:#?}");
+        assert!(!warnings.is_empty());
+        // (b) A raw child, modelled listers: warnings.
+        let (errors, warnings) = findings(true, [false, false]);
+        assert!(errors.is_empty(), "{errors:#?}");
+        assert!(!warnings.is_empty());
+        // (c) A modelled child, one raw and one modelled lister: the
+        // modelled lister's finding is an error, the raw one's a warning.
+        let (errors, warnings) = findings(false, [true, false]);
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert!(errors[0].contains("DICTIONARY 52"), "{errors:#?}");
+        assert!(!warnings.is_empty());
     }
 
     /// An XRECORD's hard references are application data: one naming

@@ -103,8 +103,30 @@ pub struct DataStorage {
     pub schemas: Vec<Schema>,
     /// ODS's schema unknown properties, in schema index order.
     pub unknown_properties: Vec<UnknownProperty>,
-    /// The records, in data index order.
+    /// The records, in data index order: by schema, then handle, as
+    /// AutoCAD writes them ([`DataStorage::parse`] and deserializing sort
+    /// records stored out of that order, stably). [`DataStorage::acis_data`]
+    /// finds records by binary search in this order: after changing the
+    /// records by hand, keep it, or call [`DataStorage::sort_records`].
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "sorted_records"))]
     pub records: Vec<DataRecord>,
+}
+
+/// Deserialize records into data index order (see
+/// [`DataStorage::records`]).
+#[cfg(feature = "serde")]
+fn sorted_records<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<DataRecord>, D::Error> {
+    let mut records: Vec<DataRecord> = serde::Deserialize::deserialize(d)?;
+    records.sort_by_key(DataRecord::order);
+    Ok(records)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The records [`DataStorage::acis_data`] compared, for work tests.
+    static ACIS_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A schema (ODS 24.2.2.6.1).
@@ -180,6 +202,13 @@ pub struct DataRecord {
     /// The [`Schema::index`] of the record's schema.
     pub schema: u32,
     pub data: Vec<u8>,
+}
+
+impl DataRecord {
+    /// The record's key in data index order: schema, then handle.
+    fn order(&self) -> (u32, Handle) {
+        (self.schema, self.handle)
+    }
 }
 
 /// One schema's search data (ODS 24.2.2.7.1).
@@ -752,16 +781,21 @@ impl DataStorage {
         let segs = segment_index(bytes, &h)?;
         let (schemas, unknown_properties) = parse_schemas(&segs, h.schidx)?;
         let records = parse_records(&segs, h.datidx)?;
-        Ok(DataStorage {
+        let mut s = DataStorage {
             revision: h.revision,
             schemas,
             unknown_properties,
             records,
-        })
+        };
+        s.sort_records();
+        Ok(s)
     }
 
     /// The search segment of the section `bytes` as stored, for inspection:
-    /// [`DataStorage::encode`] writes [`DataStorage::search`] instead.
+    /// [`DataStorage::encode`] writes [`DataStorage::search`] instead. Its
+    /// positions are those of the records as stored: when the file stored
+    /// them out of data index order they are not positions in
+    /// [`DataStorage::records`], which [`DataStorage::parse`] sorts.
     pub fn stored_search(bytes: &[u8]) -> Result<Vec<SearchSchema>> {
         let h = file_header(bytes)?;
         parse_search(&segment_index(bytes, &h)?, h.search)
@@ -855,19 +889,30 @@ impl DataStorage {
     }
 
     /// The ACIS (SAB) data of entity `h`: its first record under
-    /// [`ACIS_SCHEMA`].
+    /// [`ACIS_SCHEMA`], found by binary search in the records' data index
+    /// order (see [`DataStorage::records`]).
     pub fn acis_data(&self, h: Handle) -> Option<&[u8]> {
         let schema = self.schema_index(ACIS_SCHEMA)?;
-        self.records
-            .iter()
-            .find(|r| r.schema == schema && r.handle == h)
-            .map(|r| r.data.as_slice())
+        let key = (schema, h);
+        let at = self.records.partition_point(|r| {
+            #[cfg(test)]
+            ACIS_PROBES.with(|n| n.set(n.get() + 1));
+            r.order() < key
+        });
+        let r = self.records.get(at).filter(|r| r.order() == key)?;
+        Some(r.data.as_slice())
+    }
+
+    /// Put the records in data index order (by schema, then handle),
+    /// stably: records of one handle keep their order.
+    pub fn sort_records(&mut self) {
+        self.records.sort_by_key(DataRecord::order);
     }
 
     /// Set entity `h`'s ACIS data: its records under [`ACIS_SCHEMA`] are
     /// replaced by one with `data`, placed in data index order (by schema,
     /// then handle). The schema is added (in ODS's form) when missing.
-    /// Records not in that order (changed by hand) are sorted first, stably.
+    /// Records not in that order (changed by hand) are sorted, stably.
     /// To set many, [`DataStorage::set_acis_data_all`] does it in one pass.
     pub fn set_acis_data(&mut self, h: Handle, data: Vec<u8>) {
         self.set_acis_data_all([(h, data)]);
@@ -903,7 +948,7 @@ impl DataStorage {
             schema,
             data: new.remove(&h).unwrap_or_default(),
         }));
-        self.records.sort_by_key(|r| (r.schema, r.handle));
+        self.sort_records();
     }
 
     /// Keep only the ACIS records whose handle `keep` accepts (records of
@@ -946,7 +991,7 @@ impl DataStorage {
         for (r, h) in self.records.iter_mut().zip(new) {
             r.handle = h;
         }
-        self.records.sort_by_key(|r| (r.schema, r.handle));
+        self.sort_records();
         Ok(())
     }
 
@@ -1419,6 +1464,60 @@ mod tests {
         s.retain_acis(|h| h != Handle(0x50));
         assert_eq!(s.records.len(), 1);
         assert_eq!(s.acis_data(Handle(0x60)), Some(&[2][..]));
+    }
+
+    /// A record is found by binary search, at most about log2(n) + 2
+    /// comparisons for n records; a handle with no record, or a record
+    /// under another schema, is not found; of a handle's records the first
+    /// is. Records out of data index order (read so, deserialized, or
+    /// changed by hand and sorted) are put back in it, stably.
+    #[test]
+    fn acis_data_found_by_binary_search() {
+        let mut s = DataStorage::with_default_schemas();
+        let acis = s.schema_index(ACIS_SCHEMA).unwrap();
+        let other = s.schema_index("AcDbDs::LegacySchema").unwrap();
+        s.set_acis_data_all((1..=1000u64).map(|i| (Handle(2 * i), vec![i as u8])));
+        s.records.push(DataRecord {
+            handle: Handle(3),
+            schema: other,
+            data: vec![0xEE],
+        });
+        s.sort_records();
+        let n = s.records.len();
+        let per = n.ilog2() as usize + 2;
+        let check = |s: &DataStorage| {
+            for i in [1u64, 2, 500, 999, 1000] {
+                ACIS_PROBES.with(|p| p.set(0));
+                assert_eq!(s.acis_data(Handle(2 * i)), Some(&[i as u8][..]), "{i}");
+                let probes = ACIS_PROBES.with(|p| p.get());
+                assert!(probes <= per, "{probes} comparisons for {n} records");
+            }
+            assert_eq!(s.acis_data(Handle(3)), None);
+            assert_eq!(s.acis_data(Handle(2001)), None);
+            assert_eq!(s.acis_data(Handle(0)), None);
+        };
+        check(&s);
+        let sorted = s.records.clone();
+        s.records.reverse();
+        s.records.rotate_left(337);
+        s.sort_records();
+        assert_eq!(s.records, sorted);
+        check(&s);
+        // Parsing sorts records stored out of order.
+        let mut unsorted = s.clone();
+        unsorted.records.reverse();
+        let parsed = DataStorage::parse(&unsorted.encode().unwrap()).unwrap();
+        assert_eq!(parsed.records, sorted);
+        // Two records of one handle: the first, in stored order.
+        let dup = |data: u8| DataRecord {
+            handle: Handle(0x11),
+            schema: acis,
+            data: vec![data],
+        };
+        s.records.push(dup(0xA1));
+        s.records.push(dup(0xA2));
+        s.sort_records();
+        assert_eq!(s.acis_data(Handle(0x11)), Some(&[0xA1][..]));
     }
 
     /// Setting many records at once gives what setting them one by one

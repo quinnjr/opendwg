@@ -35,10 +35,17 @@ const VERSIONS: [Version; 6] = [
 /// The largest whole file used as a seed.
 const SMALL_FILE: usize = 64 * 1024;
 
-/// The selector byte of the versioned targets (see `split` in the targets).
-fn selector(v: Version, codepage: u16) -> u8 {
+/// The selector byte of the versioned targets (see `split` in the targets):
+/// the version's index, with bit 0x80 for code page 38 (ANSI_932). The
+/// targets know only code pages 30 and 38, so a drawing in another code
+/// page has no selector: its bytes would be decoded in the wrong one.
+fn selector(v: Version, codepage: u16) -> Option<u8> {
     let i = VERSIONS.iter().position(|&x| x == v).unwrap_or(0) as u8;
-    if codepage == 30 { i } else { i | 0x80 }
+    match codepage {
+        30 => Some(i),
+        38 => Some(i | 0x80),
+        _ => None,
+    }
 }
 
 fn u64_at(b: &[u8], at: usize) -> Option<u64> {
@@ -63,7 +70,7 @@ impl Seeds {
     }
 
     fn versioned(&mut self, target: &str, v: Version, bytes: &[u8]) {
-        let mut b = vec![selector(v, 30)];
+        let mut b = vec![selector(v, 30).expect("code page 30 has a selector")];
         b.extend_from_slice(bytes);
         self.put(target, &b);
     }
@@ -173,7 +180,11 @@ impl Seeds {
         let Ok(classes) = opendwg::section::classes::decode(classes, v, cp) else {
             return;
         };
-        let head = class_header(selector(v, cp), &classes);
+        // Seeded only in a code page the target can select.
+        let Some(sel) = selector(v, cp) else {
+            return;
+        };
+        let head = class_header(sel, &classes);
         for (_, loc) in map {
             let Some(at) = loc
                 .checked_sub(raw.objects_base)

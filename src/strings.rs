@@ -5,9 +5,11 @@
 //! ACadSharp (MIT), `CadUtils._pageCodes`, which matches the `$DWGCODEPAGE`
 //! names AutoCAD writes to DXF (e.g. 30 = ANSI_1252, 38 = ANSI_932).
 //!
-//! Code pages that `encoding_rs` cannot decode (the DOS OEM pages and Johab) and
-//! unknown indices fall back to Windows-1252; [`is_supported`] reports this so
-//! the caller can add a `Diagnostic`.
+//! Code pages that `encoding_rs` cannot decode (the DOS OEM pages 11-21, DOS
+//! 437 to 869, and Johab, 26 and 42) and unknown indices (0 and above 44)
+//! fall back to Windows-1252; [`is_supported`] reports this so the caller can
+//! add a `Diagnostic`. DOS 932 (22) and DOS 866 (27) decode, as Shift-JIS
+//! and IBM866.
 
 use encoding_rs::{
     BIG5, EUC_KR, Encoding, GBK, IBM866, ISO_8859_2, ISO_8859_3, ISO_8859_4, ISO_8859_5,
