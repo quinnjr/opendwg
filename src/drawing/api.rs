@@ -699,17 +699,16 @@ impl Drawing {
 
     /// The model space block record: the header's, or the block record named
     /// `*Model_Space` when the header's is not a block record; null when
-    /// there is neither. The name is looked up in the name index (see
-    /// [`Drawing::table_named`]), so a header that names no block record
-    /// costs one read of the block table, not one per call.
-    ///
-    /// It takes the reference index's lock: callers holding it compute
-    /// model space first.
+    /// there is neither. The name is looked up in an index, so a header
+    /// that names no block record costs one read of the block table, not
+    /// one per call.
     pub fn model_space(&self) -> Handle {
         let h = self.header.block_record_model_space;
         if self.block_record(h).is_some() {
             return h;
         }
+        // The name index takes the reference index's lock: callers holding
+        // it compute model space first (see `validate_written`).
         self.table_named(TableKind::Block, "*Model_Space")
             .into_iter()
             .find(|&h| self.block_record(h).is_some())
