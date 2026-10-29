@@ -8,7 +8,8 @@
 //! or adds, which a second save keeps), or holds objects R2018 cannot store
 //! and is refused with [`Error::UnconvertibleObjects`]. Every other file is
 //! refused with [`Error::UnsupportedVersion`]. Then feature tests: xrefs,
-//! GBK text, and Civil 3D objects kept byte for byte.
+//! GBK, Big5 and Shift-JIS text, and Civil 3D and Map 3D objects kept byte
+//! for byte.
 //!
 //! The files are fetched by `scripts/fetch-corpus.sh`; a missing one is
 //! skipped (a failure with `OPENDWG_REQUIRE_CORPUS=1`).
@@ -338,6 +339,49 @@ fn gbk_text_decodes() {
     }
 }
 
+/// Big5 (ANSI_950) and Shift-JIS (ANSI_932) drawings: an R2000 file from a
+/// Traditional Chinese AutoCAD (text in the code page) and a Japanese
+/// AutoCAD 2026 file (UTF-16 text, Shift-JIS code page).
+#[test]
+fn big5_and_shift_jis_text_decodes() {
+    if let Some(d) = open("tw-01") {
+        assert_eq!(d.header.dwgcodepage, 41);
+        assert!(d.layouts().iter().any(|(_, l)| l.name == "配置1"));
+    }
+    if let Some(d) = open("peta-03") {
+        assert_eq!(d.header.dwgcodepage, 38);
+        assert!(d.layouts().iter().any(|(_, l)| l.name == "レイアウト1"));
+        assert!(d.objects().any(|(_, o)| matches!(o,
+            Object::Entity { entity: Entity::Text(t), .. } if t.value == "あいうえおアイウエオ")));
+    }
+}
+
+/// Map 3D object data (IRD_* classes) in a Civil 3D 2026 drawing is kept
+/// raw and written back byte for byte.
+#[test]
+fn map_3d_object_data_round_trips_byte_identical() {
+    let Some(p) = common::corpus_file_or_skip("esri-01") else {
+        return;
+    };
+    let bytes = std::fs::read(p).unwrap();
+    let d = Drawing::from_bytes(&bytes).unwrap();
+    let out = d.to_bytes().unwrap();
+    let (before, after) = (common::object_bytes(&bytes), common::object_bytes(&out));
+    let ird: Vec<Handle> = d
+        .objects()
+        .filter(|(_, o)| {
+            o.raw()
+                .and_then(|r| r.class_name.as_deref())
+                .is_some_and(|c| c.starts_with("IRD_"))
+        })
+        .map(|(h, _)| h)
+        .collect();
+    assert!(ird.len() >= 10, "{} IRD objects", ird.len());
+    for h in ird {
+        assert_eq!(before.get(&h), after.get(&h), "IRD object {h}");
+    }
+}
+
 /// The ODA SDK and civilcraft's own writer store pre-R2007 text items
 /// (XRECORD texts, extended data strings) with code page 0; read in the
 /// drawing's code page, their ASCII text gives no code page warning, and
@@ -377,7 +421,15 @@ fn code_page_0_text_reads_without_warnings() {
 /// AutoCAD-written files.
 #[test]
 fn civil_3d_objects_round_trip_byte_identical() {
-    for name in ["camber-01", "camber-18", "camber-26", "c3dtk-01", "rc-03"] {
+    for name in [
+        "camber-01",
+        "camber-18",
+        "camber-26",
+        "c3dtk-01",
+        "rc-03",
+        "esri-01",
+        "esri-02",
+    ] {
         let Some(p) = common::corpus_file_or_skip(name) else {
             continue;
         };
