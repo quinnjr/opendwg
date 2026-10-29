@@ -493,6 +493,8 @@ mod tests {
     /// the writer cannot convert (the producers the module documentation
     /// names).
     const REPAIRED_CORPUS: &[(&str, bool)] = &[
+        ("bim-01.dwg", false),
+        ("bim-02.dwg", false),
         ("brx-01.dwg", false),
         ("brx-02.dwg", false),
         ("brx-03.dwg", false),
@@ -501,6 +503,8 @@ mod tests {
         ("cc-09.dwg", false),
         ("cc-12.dwg", false),
         ("cc-13.dwg", false),
+        ("cw-01.dwg", false),
+        ("cw-02.dwg", false),
         ("dsh-01.dwg", true),
         ("dsh-02.dwg", true),
         ("ezdxf-04.dwg", false),
@@ -508,6 +512,10 @@ mod tests {
         ("gdal-04.dwg", true),
         ("gdal-05.dwg", true),
         ("geo7-01.dwg", false),
+        ("ohag-01.dwg", false),
+        ("ohag-02.dwg", false),
+        ("tw-01.dwg", true),
+        ("tw-02.dwg", false),
     ];
 
     /// Drawings lacking each required object, all of them, or with a named
