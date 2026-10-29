@@ -128,7 +128,7 @@ pub struct Viewport {
 
 /// The R2007+ viewport values before R2007: grid major, use default lights,
 /// lighting type, brightness, contrast and ambient color, as AutoCAD writes
-/// for viewports that had none (see `corpus_viewport_values`).
+/// for viewports that had none (see `corpus_viewport_and_image_values`).
 const VIEWPORT_R2007_DEFAULTS: (i16, bool, u8, f64, f64) = (5, true, 1, 0.0, 0.0);
 
 /// The R2007+ ambient light color before R2007, as AutoCAD writes it.

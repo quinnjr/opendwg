@@ -134,7 +134,8 @@ impl RawObject {
     /// between versions that share the R2007+ stream layout; R2000/R2004 bits
     /// are only valid in their own version.
     pub fn is_convertible_to(&self, target: Version) -> bool {
-        target == self.source_version || self.source_version >= Version::R2007
+        target == self.source_version
+            || (self.source_version >= Version::R2007 && target >= Version::R2007)
     }
 }
 
@@ -294,6 +295,9 @@ mod tests {
         );
         assert!(raw.tail_handles_raw.len() <= 1);
         assert!(raw.is_convertible_to(Version::R2018));
+        assert!(raw.is_convertible_to(Version::R2007));
+        assert!(!raw.is_convertible_to(Version::R2000));
+        assert!(!raw.is_convertible_to(Version::R2004));
     }
 
     #[test]

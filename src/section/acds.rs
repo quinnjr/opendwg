@@ -52,7 +52,7 @@
 //! skipped as ODS says). Blob records follow ODS; the reference record's
 //! "record size" is taken as the size of its fields after the marker.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::error::{Error, Result};
 use crate::handle::Handle;
@@ -936,7 +936,15 @@ impl DataStorage {
         let schema = match self.schema_index(ACIS_SCHEMA) {
             Some(s) => s,
             None => {
-                let index = self.schemas.iter().map(|s| s.index + 1).max().unwrap_or(0);
+                // One past the largest index, or, when that would overflow
+                // (an index of u32::MAX, from the file or JSON), the lowest
+                // unused one.
+                let index = if self.schemas.iter().any(|s| s.index == u32::MAX) {
+                    let used: HashSet<u32> = self.schemas.iter().map(|s| s.index).collect();
+                    (0..u32::MAX).find(|i| !used.contains(i)).unwrap_or(0)
+                } else {
+                    self.schemas.iter().map(|s| s.index + 1).max().unwrap_or(0)
+                };
                 self.schemas.push(acis_schema(index));
                 index
             }
@@ -1389,6 +1397,25 @@ mod tests {
         let mut s = DataStorage::with_default_schemas();
         s.records = vec![record(0x20, 0, 100), record(0x30, 0, 5), record(0x30, 3, 0)];
         s
+    }
+
+    /// A schema index of u32::MAX (hostile input) leaves no "one past the
+    /// largest": the ACIS schema takes the lowest unused index instead of
+    /// overflowing.
+    #[test]
+    fn acis_schema_after_max_index_takes_lowest_unused() {
+        let mut s = DataStorage::with_default_schemas();
+        s.schemas.retain(|x| x.name != ACIS_SCHEMA);
+        let mut odd = s.schemas[0].clone();
+        odd.index = u32::MAX;
+        odd.name = "Odd".into();
+        s.schemas.push(odd);
+        s.set_acis_data(Handle(0x40), vec![1, 2, 3]);
+        let indexes: HashSet<u32> = s.schemas.iter().map(|x| x.index).collect();
+        assert_eq!(indexes.len(), s.schemas.len(), "schema indexes stay unique");
+        let acis = s.schema_index(ACIS_SCHEMA).unwrap();
+        assert_ne!(acis, u32::MAX);
+        assert_eq!(s.acis_data(Handle(0x40)), Some(&[1u8, 2, 3][..]));
     }
 
     #[test]

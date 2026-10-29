@@ -1380,10 +1380,11 @@ fn unread_bits(r: &ObjReader) -> Option<String> {
 
 /// Run a typed decoder on a copy of `r`. On success the copy replaces `r`;
 /// on failure, or when the decoder leaves bits unread (they would be lost on
-/// write), `r` is left after the common data and a warning is recorded, so
-/// the caller keeps the object raw.
+/// write), `r` is left after the common data and a warning about `handle`
+/// (the object map's) is recorded, so the caller keeps the object raw.
 fn try_typed<T>(
     r: &mut ObjReader,
+    handle: Handle,
     key: TypeKey,
     type_name: impl FnOnce() -> String,
     decode: fn(TypeKey, &mut ObjReader) -> Option<Result<T>>,
@@ -1402,7 +1403,7 @@ fn try_typed<T>(
     };
     diagnostics.push(Diagnostic {
         severity: Severity::Warning,
-        handle: Some(r.handle),
+        handle: Some(handle),
         message: format!("{} decode failed: {failure}; kept raw", type_name()),
     });
     None
@@ -1468,7 +1469,14 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
     let name = || key_name(key).into_owned();
     let obj = if is_entity {
         let common = decode_entity_common(&mut r)?;
-        let entity = match try_typed(&mut r, key, name, typed_entity, &mut ctx.diagnostics) {
+        let entity = match try_typed(
+            &mut r,
+            handle,
+            key,
+            name,
+            typed_entity,
+            &mut ctx.diagnostics,
+        ) {
             Some(e) => e,
             None => Entity::Unknown(RawObject::decode(&mut r, code, class_name)?),
         };
@@ -1479,7 +1487,14 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
             .mleader_style_marker
             .is_some_and(|m| common.xdata.iter().any(|x| x.app == m));
         r.saved_by_object_version = saved_by_object_version(&common);
-        let object = match try_typed(&mut r, key, name, typed_object, &mut ctx.diagnostics) {
+        let object = match try_typed(
+            &mut r,
+            handle,
+            key,
+            name,
+            typed_object,
+            &mut ctx.diagnostics,
+        ) {
             Some(o) => o,
             None => NonGraphical::Unknown(RawObject::decode(&mut r, code, class_name)?),
         };
@@ -1488,6 +1503,11 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
     if obj.handle() != handle {
         let message = format!("object stores handle {}", obj.handle());
         warn(&mut ctx.diagnostics, message);
+    }
+    // The reader's own warnings (lossy text) name the handle it read from
+    // the object; report them under the map's, as every other one is.
+    for d in &mut r.diagnostics {
+        d.handle = Some(handle);
     }
     ctx.diagnostics.append(&mut r.diagnostics);
     Ok(obj)
@@ -2071,7 +2091,14 @@ mod tests {
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
         assert_eq!(
-            try_typed(&mut r, key, || "XRECORD".into(), failing, &mut diags),
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                failing,
+                &mut diags
+            ),
             None
         );
         assert_eq!(
@@ -2098,14 +2125,28 @@ mod tests {
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
         assert_eq!(
-            try_typed(&mut r, key, || "XRECORD".into(), succeeding, &mut diags),
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                succeeding,
+                &mut diags
+            ),
             Some(300)
         );
         assert!(diags.is_empty());
         assert_eq!(r.data.bit_pos(), pos + 19);
         assert_eq!(r.data.remaining_bits(), 0);
         assert_eq!(
-            try_typed(&mut r, key, || "XRECORD".into(), typed_none, &mut diags),
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                typed_none,
+                &mut diags
+            ),
             None
         );
         assert_eq!(r.data.bit_pos(), pos + 19);
@@ -2120,7 +2161,14 @@ mod tests {
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
         assert_eq!(
-            try_typed(&mut r, key, || "XRECORD".into(), partial, &mut diags),
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                partial,
+                &mut diags
+            ),
             None
         );
         assert_eq!(r.data.bit_pos(), pos);
@@ -2150,12 +2198,66 @@ mod tests {
         assert!(msgs[1].contains("stores handle 80"));
         assert!(c.diagnostics.iter().all(|d| d.handle == Some(Handle(0x81))));
 
+        // A failed typed decode's warning, too, names the map's handle, not
+        // the one the object stores.
+        let xrecord = custom_object(type_code::XRECORD, 0x80);
+        let mut c = ctx(&[]);
+        let obj = decode_object(&xrecord, Handle(0x81), &mut c).unwrap();
+        assert_eq!(obj.type_name(), "XRECORD");
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("kept raw")),
+            "{:?}",
+            c.diagnostics
+        );
+        assert!(c.diagnostics.iter().all(|d| d.handle == Some(Handle(0x81))));
+
         let n = bytes.len();
         bytes[n - 1] ^= 0xFF;
         let mut c = ctx(&[]);
         decode_object(&bytes, Handle(0x80), &mut c).unwrap();
         assert_eq!(c.diagnostics.len(), 2, "{:?}", c.diagnostics);
         assert!(c.diagnostics[0].message.contains("CRC"));
+    }
+
+    /// The reader's own warnings (here a string in an unsupported code page
+    /// in the extended data) name the object map's handle too, when the
+    /// object stores another.
+    #[test]
+    fn reader_warnings_name_the_map_handle() {
+        let mut d = BitWriter::new();
+        d.write_handle_ref(HandleRef {
+            code: 0,
+            value: 0x50,
+        })
+        .unwrap();
+        let data = [0, 1, 0, 11, b'A'];
+        d.write_bs(data.len() as i16);
+        d.write_handle_ref(HandleRef {
+            code: 5,
+            value: 0x12,
+        })
+        .unwrap();
+        d.write_bytes(&data);
+        d.write_bs(0);
+        d.write_bl(0); // reactors
+        d.write_b(true); // no xdict
+        let mut hs = BitWriter::new();
+        hs.write_handle_ref(HandleRef { code: 4, value: 1 })
+            .unwrap();
+        let bytes = assemble(Version::R2004, type_code::DICTIONARY, &d, None, &hs);
+        let mut c = DecodeCtx {
+            version: Version::R2004,
+            ..ctx(&[])
+        };
+        decode_object(&bytes, Handle(0x51), &mut c).unwrap();
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("code page 11")),
+            "{:?}",
+            c.diagnostics
+        );
+        assert!(c.diagnostics.iter().all(|d| d.handle == Some(Handle(0x51))));
     }
 
     #[test]

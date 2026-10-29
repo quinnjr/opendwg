@@ -24,7 +24,11 @@
 //!   property-changed bit (295) (ODS: after); R2013+ adds a `B` (DXF 298),
 //!   as ACadSharp `readMultiLeaderStyle` reads it. Before R2010 the
 //!   ACAD_MLEADERVER extended data marks the new format (as ODS says; every
-//!   corpus style has it).
+//!   corpus style has it). The R2010+ attachments are read as direction,
+//!   top, bottom (DXF 271, 273, 272), while MULTILEADER reads direction,
+//!   bottom, top; ODS may give the style direction, bottom, top. The order
+//!   is unconfirmed: every corpus style has 9 for both top and bottom, so
+//!   the corpus cannot tell the two apart.
 //! - TABLESTYLE: in an R2000 file its colors are R2004 `CMC`s; a cell
 //!   without a background has the color method 0xC8
 //!   ([`crate::bits::Color::None`]). The R2010+ layout follows ODS
