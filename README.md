@@ -89,8 +89,9 @@ them before saving. `to_bytes` and `save` write the same file without them.
 The writer also adds what AutoCAD requires and other programs' files lack
 (the dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
 dictionaries), sets a null owner to the one object that lists it (an object
-two objects list is refused by validation: which one owns it is not known),
-and gives an entity the block that lists it as owner, each with a warning;
+two objects list keeps it, as which one owns it is not known: validation
+refuses it, but only warns when it, or every object listing it, is kept
+raw), and gives an entity the block that lists it as owner, each with a warning;
 the drawing itself is not changed. `Drawing::validate` checks ownership,
 references, handles and required tables; the writer runs it before every
 save. `Drawing::remove` refuses to delete an object something still refers

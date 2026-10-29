@@ -54,8 +54,10 @@
 //!   - an object listed as owned (an extension dictionary, an entry of a
 //!     hard-owner dictionary) by exactly one object, that stores a null
 //!     owner, gets its lister as owner, with a warning (AutoCAD 2002's R14
-//!     round-trip data); one that two objects list keeps its null owner,
-//!     and validation refuses it (which one owns it is not known);
+//!     round-trip data); one that two objects list keeps its null owner
+//!     (which one owns it is not known), and validation refuses it, but
+//!     only warns when it, or every object listing it, is kept raw (see
+//!     `drawing::validate`);
 //!   - an entity exactly one block record lists, whose owner names another
 //!     object, gets that block as owner (and entity mode), with a warning;
 //!   - a VISUALSTYLE stored in a layout older than R2018's (read before
@@ -1059,8 +1061,8 @@ impl Drawing {
     /// hard-owner dictionary (with or without default). AutoCAD 2002 and
     /// 2004 wrote a DIMSTYLE's R14 round-trip extension dictionary and its
     /// XRECORD so (`arx-02`, `arx-03` of the extended corpus). An object
-    /// two objects list is left to `validate()`, which refuses it: which
-    /// one owns it is not known.
+    /// two objects list is left to `validate()` (which one owns it is not
+    /// known), which refuses it unless it, or every lister, is kept raw.
     fn null_owners(objects: &impl ObjectSet) -> Vec<(Handle, Handle, Diagnostic)> {
         let null = |h: Handle| matches!(objects.object(h), Some(Object::Other { common, .. }) if common.owner.0 == 0);
         let name = |h: Handle| {
