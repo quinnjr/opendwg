@@ -142,6 +142,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::Path;
 
+use super::repair::RepairNote;
 use super::{Drawing, ObjectSet, own_layout_viewports};
 use crate::container::{
     R2004_PLAIN_HEADER_LEN, RawSections, SectionMeta, SectionName, r2018_preview_address,
@@ -432,11 +433,9 @@ pub(super) struct Changes {
     pub(super) added: Vec<Handle>,
     /// The header as written, when the additions change it.
     header: Option<Box<HeaderVars>>,
-    /// A warning per addition (see [`Drawing::validate`]).
-    pub(super) repairs: Vec<Diagnostic>,
-    /// The warnings of the additions that cannot be made, saying why (see
-    /// `Repair::failed`).
-    repair_failures: Vec<Diagnostic>,
+    /// A warning per addition, and per one that cannot be made (see
+    /// [`Drawing::validate`]).
+    pub(super) repairs: Vec<RepairNote>,
 }
 
 impl Changes {
@@ -573,7 +572,7 @@ impl Drawing {
     /// Fails with [`Error::UnconvertibleObjects`] when objects cannot be
     /// written as R2018 (see [`Drawing::unconvertible_objects`]), and with
     /// [`Error::Invalid`] when [`Drawing::validate`] finds errors in the
-    /// drawing as it will be written (followed by the warnings of the
+    /// drawing as it will be written (preceded by the warnings of the
     /// required objects the writer could not add, saying why) or an ACIS
     /// entity in the R2013+ form has no data storage record (see the module
     /// documentation). The drawing is not changed. Sections left
@@ -601,7 +600,11 @@ impl Drawing {
             }
         }
         let mut changes = self.refreshed(work);
-        let mut diags = std::mem::take(&mut changes.repairs);
+        let mut diags: Vec<Diagnostic> = changes
+            .repairs
+            .iter()
+            .map(|n| n.diagnostic().clone())
+            .collect();
         diags.append(&mut changes.warnings);
         if dry_run {
             let written = self.objects.len() + changes.added.len() - changes.dropped.len();
@@ -613,14 +616,23 @@ impl Drawing {
             }
             return Ok((Vec::new(), diags));
         }
-        let mut invalid: Vec<Diagnostic> = self
+        let errors: Vec<Diagnostic> = self
             .validate_written(&changes, &mut 0)
             .into_iter()
             .filter(|d| d.severity == Severity::Error)
             .collect();
-        if !invalid.is_empty() {
-            // Why a required object is missing: the writer could not add it.
-            invalid.append(&mut changes.repair_failures);
+        if !errors.is_empty() {
+            // Why a required object is missing (the writer could not add
+            // it) comes first: the error's message shows the first few.
+            let mut invalid: Vec<Diagnostic> = changes
+                .repairs
+                .iter()
+                .filter_map(|n| match n {
+                    RepairNote::NotAdded(d) => Some(d.clone()),
+                    RepairNote::Added(_) => None,
+                })
+                .collect();
+            invalid.extend(errors);
             return Err(Error::Invalid(invalid));
         }
         let (bytes, warnings) = self.encode_file(saved, work, changes)?;
@@ -847,8 +859,7 @@ impl Drawing {
             changes.overlay = repair.objects;
             changes.added = repair.added;
             changes.header = Some(Box::new(repair.header));
-            changes.repairs = repair.warnings;
-            changes.repair_failures = repair.failed;
+            changes.repairs = repair.notes;
         }
         let Drops {
             dropped, owners, ..

@@ -254,7 +254,7 @@ impl Drawing {
         let changes = self.refreshed(&mut WriteWork::default());
         let mut found = self.validate_written(&changes, &mut 0);
         if !changes.repairs.is_empty() {
-            found.extend(changes.repairs.iter().cloned());
+            found.extend(changes.repairs.iter().map(|n| n.diagnostic().clone()));
             found.sort_by(|a, b| (a.handle, &a.message).cmp(&(b.handle, &b.message)));
             found.dedup();
         }
