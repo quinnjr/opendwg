@@ -88,14 +88,14 @@ return those warnings with the file, and `Drawing::write_diagnostics` lists
 them before saving. `to_bytes` and `save` write the same file without them.
 The writer also adds what AutoCAD requires and other programs' files lack
 (the dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
-dictionaries), sets a null owner to the one object that lists it (an object
-two objects list keeps it, as which one owns it is not known: validation
-refuses it, but only warns when it, or every object listing it, is kept
-raw), and gives an entity the block that lists it as owner, each with a warning;
-the drawing itself is not changed. `Drawing::validate` checks ownership,
-references, handles and required tables; the writer runs it before every
-save. `Drawing::remove` refuses to delete an object something still refers
-to (`Error::InUse`).
+dictionaries), sets a null owner to the one object that lists it, and gives
+an entity the block that lists it as owner, each with a warning; the drawing
+itself is not changed. An object two objects list keeps its null owner
+(which one owns it is not known): validation refuses it, but only warns
+when the object, or every object listing it, is kept raw. `Drawing::validate`
+checks ownership, references, handles and required tables; the writer runs it
+before every save. `Drawing::remove` refuses to delete an object something
+still refers to (`Error::InUse`).
 
 ## Objects that cannot be converted
 
