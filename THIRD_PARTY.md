@@ -288,6 +288,19 @@ licence; the sources:
   CodeCAD contributors).
 - DomCR/ACadSharp at commit `29137f3adaf75ddebd532179eda1e811525ca574` (MIT, Copyright (c) 2021
   Albert Domenech): newer samples (dynamic blocks, geolocation, sample_base, svg, AC1014).
+- roscoe-tw/fu-acaddoc (MIT, Copyright (c) 2018 roscoe-tw): Big5 (ANSI_950) drawings of an
+  AutoLISP sample.
+- nisefuruta/CADPeta (MIT, Copyright (c) 2026 WATANABE Kazufumi): Japanese AutoCAD 2026 test
+  charts (ANSI_932).
+- Esri/ArcGIS-for-AutoCAD-API-Samples (Apache-2.0, Copyright 2024 Esri): Civil 3D 2026 and
+  AutoCAD 2025 sample drawings (AECC objects, Map 3D object data, ArcGIS dictionaries).
+- ohagmann/cadcraft-sample-dwgs (CC0-1.0): BricsCAD V26 building-automation sheets.
+- getcadcraft/bimcraft (Apache-2.0): fixtures written by getcadcraft's own writer.
+- Fate-GX/geologic-section-alpha (MIT, Copyright (c) 2026 Hirotou Yuusuek): a synthetic
+  geologic section from a Japanese AutoCAD 2027.
+- GeorgGrebenyuk/civil3d_2_ifc (MIT, Copyright (c) 2022 Georg Grebenyuk): a Civil 3D 2022 demo
+  drawing (ANSI_1251).
+- cwoffenden/CAD-projects (CC0-1.0): BricsCAD V24/V25 mechanical drawings (Git LFS).
 - USDA Forest Service Engineering AutoCAD Drawing Library: US federal works, public domain
   (17 USC 105).
 
