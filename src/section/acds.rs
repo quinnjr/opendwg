@@ -792,7 +792,10 @@ impl DataStorage {
     }
 
     /// The search segment of the section `bytes` as stored, for inspection:
-    /// [`DataStorage::encode`] writes [`DataStorage::search`] instead.
+    /// [`DataStorage::encode`] writes [`DataStorage::search`] instead. Its
+    /// positions are those of the records as stored: when the file stored
+    /// them out of data index order they are not positions in
+    /// [`DataStorage::records`], which [`DataStorage::parse`] sorts.
     pub fn stored_search(bytes: &[u8]) -> Result<Vec<SearchSchema>> {
         let h = file_header(bytes)?;
         parse_search(&segment_index(bytes, &h)?, h.search)

@@ -786,6 +786,8 @@ thread_local! {
 }
 
 impl TextDoubts {
+    /// Note `doubt` about a text item of the object; one already noted is
+    /// kept once.
     pub(crate) fn insert(&mut self, doubt: TextDoubt) {
         #[cfg(test)]
         DOUBTS_NOTED.with(|n| n.set(n.get() + 1));
