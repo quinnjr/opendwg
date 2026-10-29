@@ -10,7 +10,8 @@
 //! accepts for themselves (see THIRD_PARTY.md, "ODA File Converter"):
 //! running it on a developer machine is fine, running it in hosted or
 //! shared CI is not clearly permitted. So these tests never download it,
-//! skip when the `CI` environment variable is set, and skip with a printed
+//! skip when the `CI` environment variable is set to a value other than
+//! empty, `0` or `false` (CI services set it to `true`), and skip with a printed
 //! `SKIP` message when the converter is not installed. CI relies on
 //! `Drawing::validate` and the manual AutoCAD sign-off
 //! (`scripts/make-signoff.sh`) instead.

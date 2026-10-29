@@ -180,6 +180,7 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
     // Every object kept reads back with its value, the documented writer
     // refreshes aside (see `common::model::undo_refreshes`).
     let warned: HashSet<Handle> = warnings.iter().filter_map(|w| w.handle).collect();
+    let records = common::model::record_handles(&back);
     let mut differ = Vec::new();
     for (h, o) in d.objects() {
         let Some(b) = back.get(h) else { continue };
@@ -198,7 +199,7 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
             }
             continue;
         }
-        let (o, b) = common::model::undo_refreshes(&d, &back, o, b, &warned);
+        let (o, b) = common::model::undo_refreshes(&d, &back, &records, o, b, &warned);
         let o = &o;
         if !common::model::same_object(&d, h, o, &b) {
             let shown = match common::model::as_r2018(&d, h, o) {

@@ -339,7 +339,8 @@ Agreement, see `THIRD_PARTY.md`) are accepted by each person for themselves:
 running it on your own machine is fine, running it in hosted or shared CI is
 not clearly permitted. So the oracle is local opt-in only: the tests print
 `SKIP` and pass when the converter is not installed, and never run it when
-the `CI` environment variable is set. CI relies on `Drawing::validate` and
+the `CI` environment variable is set to a value other than empty, `0` or
+`false` (CI services set it to `true`). CI relies on `Drawing::validate` and
 the manual AutoCAD sign-off below.
 
 To run it, install the converter yourself, then:
