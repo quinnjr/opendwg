@@ -18,6 +18,8 @@
 //!   without the AuxHeader signature is not an AuxHeader and is skipped without a warning,
 //!   since ODS gives record 5 no meaning. Required sections (Header, Classes, Handles) are
 //!   errors.
+//! - A locator record number of 6 or more, or one given twice, is an error
+//!   ([`Error::Corrupt`]): the header is malformed.
 //! - ObjFreeSpace has no locator in R2000, so it is never produced here.
 
 use std::collections::BTreeMap;
@@ -131,9 +133,15 @@ pub(super) fn read(bytes: &[u8]) -> Result<RawSections> {
         let record = bytes[at] as usize; // in range: crc_at was found past it
         let seeker = u32_at(bytes, at + 1, "section locator")?;
         let size = u32_at(bytes, at + 5, "section locator")?;
-        if let Some(slot) = locators.get_mut(record) {
-            *slot = Some((seeker, size));
+        let slot = locators
+            .get_mut(record)
+            .ok_or_else(|| Error::Corrupt(format!("section locator record number {record}")))?;
+        if slot.is_some() {
+            return Err(Error::Corrupt(format!(
+                "section locator record {record} given twice"
+            )));
         }
+        *slot = Some((seeker, size));
     }
     let required = |idx: usize, what: &'static str| -> Result<&[u8]> {
         let (seeker, size) =
@@ -299,6 +307,22 @@ mod tests {
         ];
         for c in cases {
             assert!(read(&build(&c, None, 0, &body)).is_err(), "{c:?}");
+        }
+    }
+
+    /// A locator record number past the six ODS defines, or one given
+    /// twice, is refused (a malformed header, not one to read in part).
+    #[test]
+    fn bad_locator_record_numbers_are_refused() {
+        let (_, body) = valid(HEADER_START);
+        // Four locators: the body starts one locator later.
+        let ok = locs(OFF_LOCATORS + 4 * LOCATOR_LEN + 2 + 16);
+        let (blank, past, twice) = ((5, 0, 0), (6, 0, 0), ok[2]);
+        assert!(read(&build(&[ok[0], ok[1], ok[2], blank], None, 0, &body)).is_ok());
+        for extra in [past, (255, 0, 0), twice] {
+            let c = [ok[0], ok[1], ok[2], extra];
+            let r = read(&build(&c, None, 0, &body));
+            assert!(matches!(r, Err(Error::Corrupt(_))), "{c:?}: {r:?}");
         }
     }
 
