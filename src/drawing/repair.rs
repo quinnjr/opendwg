@@ -110,6 +110,15 @@ impl RepairNote {
             RepairNote::Added(d) | RepairNote::NotAdded(d) => d,
         }
     }
+
+    /// The warning of an addition that cannot be made, saying why; `None`
+    /// for one made.
+    pub(super) fn failure(&self) -> Option<&Diagnostic> {
+        match self {
+            RepairNote::NotAdded(d) => Some(d),
+            RepairNote::Added(_) => None,
+        }
+    }
 }
 
 /// The required objects the writer adds to a drawing that lacks them (see
@@ -154,16 +163,17 @@ impl Repair {
         next_handle_after(self.header.handseed, last)
     }
 
-    /// Record the warning of the addition of `what` that gave `made`: the
-    /// one `added` makes of its handle, or why it could not be made.
+    /// Record the outcome `made` of adding `what`: for the handle it was
+    /// added under, the warning `warning` makes of it; else the warning
+    /// saying why it could not be added.
     fn record(
         &mut self,
         made: Result<Handle>,
         what: &str,
-        added: impl FnOnce(Handle) -> Diagnostic,
+        warning: impl FnOnce(Handle) -> Diagnostic,
     ) {
         self.notes.push(match made {
-            Ok(h) => RepairNote::Added(added(h)),
+            Ok(h) => RepairNote::Added(warning(h)),
             Err(e) => RepairNote::NotAdded(not_added(what, &e)),
         });
     }
@@ -176,13 +186,11 @@ impl Repair {
 
     /// The warnings of the additions that cannot be made.
     #[cfg(test)]
-    pub(super) fn not_added(&self) -> Vec<Diagnostic> {
+    pub(super) fn failures(&self) -> Vec<Diagnostic> {
         self.notes
             .iter()
-            .filter_map(|n| match n {
-                RepairNote::NotAdded(d) => Some(d.clone()),
-                RepairNote::Added(_) => None,
-            })
+            .filter_map(RepairNote::failure)
+            .cloned()
             .collect()
     }
 }
@@ -810,7 +818,7 @@ mod tests {
         d.ref_index = Default::default();
         let r = d.repair().unwrap();
         assert!(r.added.is_empty());
-        let [w] = &r.not_added()[..] else {
+        let [w] = &r.failures()[..] else {
             panic!("{:?}", r.notes);
         };
         assert!(w.message.contains("already has an entry"), "{w:?}");
@@ -906,24 +914,26 @@ mod tests {
         assert!(found.contains(w), "{found:?}");
     }
 
-    /// `Drawing::new` without the dimension style `Standard` (renamed) and
-    /// without the named object dictionary entries `names`.
-    fn lacking(standard: bool, names: &[&str]) -> Drawing {
-        let mut d = Drawing::new();
-        if standard {
-            let h = d
-                .dim_styles()
-                .find(|(_, s)| s.entry.name == "Standard")
-                .map(|(h, _)| h)
-                .unwrap();
-            if let Some(Object::Other {
-                object: NonGraphical::DimStyle(s),
-                ..
-            }) = d.objects.get_mut(&h)
-            {
-                s.entry.name = "ISO-25".into();
-            }
+    /// `d` without the dimension style `Standard` (renamed `ISO-25`).
+    fn without_standard_dim_style(mut d: Drawing) -> Drawing {
+        let h = d
+            .dim_styles()
+            .find(|(_, s)| s.entry.name == "Standard")
+            .map(|(h, _)| h)
+            .unwrap();
+        if let Some(Object::Other {
+            object: NonGraphical::DimStyle(s),
+            ..
+        }) = d.objects.get_mut(&h)
+        {
+            s.entry.name = "ISO-25".into();
         }
+        d.ref_index = Default::default();
+        d
+    }
+
+    /// `d` without the named object dictionary entries `names`.
+    fn lacking_dictionaries(mut d: Drawing, names: &[&str]) -> Drawing {
         let nod = d.header.dict_named_objects;
         if let Some(Object::Other {
             object: NonGraphical::Dictionary(n),
@@ -942,14 +952,18 @@ mod tests {
     /// few diagnostics, says why the writer could not add them.
     #[test]
     fn refused_save_gives_the_repair_failures_first() {
-        let d = used_up(lacking(true, &["ACAD_GROUP", "ACAD_PLOTSETTINGS"]));
-        let failed = d.repair().unwrap().not_added();
+        let d = without_standard_dim_style(Drawing::new());
+        let d = used_up(lacking_dictionaries(
+            d,
+            &["ACAD_GROUP", "ACAD_PLOTSETTINGS"],
+        ));
+        let failed = d.repair().unwrap().failures();
         assert_eq!(failed.len(), 3);
-        let Err(e @ Error::Invalid(_)) = d.to_bytes() else {
+        let Err(e) = d.to_bytes() else {
             panic!("the save is refused");
         };
         let Error::Invalid(found) = &e else {
-            unreachable!()
+            panic!("{e}");
         };
         let errors = found
             .iter()
@@ -973,7 +987,7 @@ mod tests {
             ("ACAD_GROUP", group, plot),
             ("ACAD_PLOTSETTINGS", plot, group),
         ] {
-            let d = lacking(false, &[name]);
+            let d = lacking_dictionaries(Drawing::new(), &[name]);
             let back = Drawing::from_bytes(&d.to_bytes().unwrap()).unwrap();
             let Some(n) = back
                 .objects
@@ -996,7 +1010,8 @@ mod tests {
     fn mixed_repair_fails_only_what_it_cannot_add() {
         // `ACAD_GROUP` cannot be added (its name is taken by an object that
         // is no dictionary); the dimension style `Standard` is added.
-        let mut d = lacking(true, &["ACAD_GROUP"]);
+        let mut d =
+            lacking_dictionaries(without_standard_dim_style(Drawing::new()), &["ACAD_GROUP"]);
         let nod = d.header.dict_named_objects;
         let p = d.add_object(nod, "P", NonGraphical::Placeholder).unwrap();
         if let Some(Object::Other {
@@ -1013,7 +1028,7 @@ mod tests {
         d.ref_index = Default::default();
         let r = d.repair().unwrap();
         assert_eq!(r.added.len(), 1);
-        let [w] = &r.not_added()[..] else {
+        let [w] = &r.failures()[..] else {
             panic!("{:?}", r.notes);
         };
         assert!(w.message.contains("ACAD_GROUP"), "{w:?}");

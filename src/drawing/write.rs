@@ -605,7 +605,8 @@ impl Drawing {
         let mut diags: Vec<Diagnostic> = changes
             .repairs
             .iter()
-            .map(|n| n.diagnostic().clone())
+            .map(RepairNote::diagnostic)
+            .cloned()
             .collect();
         diags.append(&mut changes.warnings);
         if dry_run {
@@ -629,10 +630,8 @@ impl Drawing {
             let mut invalid: Vec<Diagnostic> = changes
                 .repairs
                 .iter()
-                .filter_map(|n| match n {
-                    RepairNote::NotAdded(d) => Some(d.clone()),
-                    RepairNote::Added(_) => None,
-                })
+                .filter_map(RepairNote::failure)
+                .cloned()
                 .collect();
             invalid.extend(errors);
             return Err(Error::Invalid(invalid));
@@ -3134,6 +3133,72 @@ mod tests {
             .collect();
         assert!(!errors.is_empty());
         assert!(matches!(d.to_bytes(), Err(Error::Invalid(_))));
+    }
+
+    /// A raw object with a null owner that two raw objects list (as their
+    /// extension dictionary) is only a warning: the drawing is saved, and
+    /// the object keeps its null owner (which lister owns it is not known).
+    #[test]
+    fn raw_null_owner_listed_twice_is_saved_as_it_is() {
+        let mut d = Drawing::new();
+        let number = d
+            .classes
+            .iter()
+            .map(|c| c.class_number)
+            .max()
+            .unwrap_or(499)
+            + 1;
+        d.classes.push(DxfClass {
+            class_number: number,
+            proxy_flags: 0x401,
+            app_name: "AeccDbMgd".into(),
+            cpp_class_name: "AeccDbLabelTextStyle".into(),
+            dxf_name: "AECC_LABEL_TEXT_STYLE".into(),
+            was_zombie: false,
+            item_class_id: crate::section::classes::ITEM_CLASS_OBJECT,
+            instance_count: 0,
+            dwg_version: 0,
+            maintenance_version: 0,
+            unknown: [0; 2],
+        });
+        let first = d.next_handle().unwrap().0.0;
+        let (child, listers) = (Handle(first), [Handle(first + 1), Handle(first + 2)]);
+        for (h, xdict) in [
+            (child, None),
+            (listers[0], Some(child)),
+            (listers[1], Some(child)),
+        ] {
+            let common = ObjectCommon {
+                handle: h,
+                xdict,
+                ..ObjectCommon::new()
+            };
+            let object = NonGraphical::Unknown(crate::object::RawObject {
+                type_code: number,
+                class_name: Some("AECC_LABEL_TEXT_STYLE".into()),
+                source_version: Version::R2018,
+                data: Vec::new(),
+                data_bits: 0,
+                strings: None,
+                handles: Vec::new(),
+                tail_handles_raw: Vec::new(),
+                tail_handle_bits: 0,
+            });
+            d.objects.insert(h, Object::Other { common, object });
+        }
+        d.header.handseed = Handle(first + 3);
+        d.ref_index = Default::default();
+        let diags = d.validate();
+        assert!(
+            diags.iter().all(|x| x.severity != Severity::Error),
+            "{diags:#?}"
+        );
+        assert!(diags.iter().any(|x| x.handle == Some(child)), "{diags:#?}");
+        let back = Drawing::from_bytes(&d.to_bytes().unwrap()).unwrap();
+        assert_eq!(back.get(child).unwrap().object_common().owner, Handle(0));
+        for h in listers {
+            assert_eq!(back.get(h).unwrap().object_common().xdict, Some(child));
+        }
     }
 
     /// When the file cannot be laid out (a summary title too long to

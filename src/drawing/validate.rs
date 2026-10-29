@@ -101,6 +101,7 @@ use std::collections::{HashMap, HashSet};
 use super::Drawing;
 use super::api::{first_dictionary, names_eq};
 use super::refs::{RefIndex, object_refs};
+use super::repair::RepairNote;
 use super::write::{Changes, WriteWork};
 use crate::diag::{Diagnostic, Severity};
 #[cfg(doc)]
@@ -254,7 +255,7 @@ impl Drawing {
         let changes = self.refreshed(&mut WriteWork::default());
         let mut found = self.validate_written(&changes, &mut 0);
         if !changes.repairs.is_empty() {
-            found.extend(changes.repairs.iter().map(|n| n.diagnostic().clone()));
+            found.extend(changes.repairs.iter().map(RepairNote::diagnostic).cloned());
             found.sort_by(|a, b| (a.handle, &a.message).cmp(&(b.handle, &b.message)));
             found.dedup();
         }
@@ -1567,6 +1568,60 @@ mod tests {
         assert!(on(&diags, 0x32, Severity::Error).is_empty(), "{diags:#?}");
         assert_eq!(on(&diags, 0x32, Severity::Warning).len(), 2, "{diags:#?}");
         assert_eq!(on(&diags, 0x33, Severity::Error).len(), 1, "{diags:#?}");
+    }
+
+    /// An object with a null owner that two objects list (as their
+    /// extension dictionary) keeps it, which one owns it not being known;
+    /// validation refuses it, but only warns when it, or every object
+    /// listing it, is raw (see `drawing::write`).
+    #[test]
+    fn null_owner_listed_twice_is_a_warning_only_when_raw() {
+        let listing = |h: u64, raw_lister: bool, child: u64| {
+            let (h, mut o) = if raw_lister {
+                raw(h, 0, &[])
+            } else {
+                other(h, 0, NonGraphical::Dictionary(Dictionary::default()))
+            };
+            o.object_common_mut().xdict = Some(Handle(child));
+            (h, o)
+        };
+        let child = |raw_child: bool| {
+            if raw_child {
+                raw(0x50, 0, &[])
+            } else {
+                other(0x50, 0, NonGraphical::Dictionary(Dictionary::default()))
+            }
+        };
+        let findings = |raw_child: bool, raw_listers: [bool; 2]| {
+            let d = drawing([
+                child(raw_child),
+                listing(0x51, raw_listers[0], 0x50),
+                listing(0x52, raw_listers[1], 0x50),
+            ]);
+            let diags: Vec<Diagnostic> = d
+                .validate()
+                .into_iter()
+                .filter(|x| !x.message.contains("no class"))
+                .collect();
+            (
+                on(&diags, 0x50, Severity::Error),
+                on(&diags, 0x50, Severity::Warning),
+            )
+        };
+        // (a) A raw child and raw listers: warnings.
+        let (errors, warnings) = findings(true, [true, true]);
+        assert!(errors.is_empty(), "{errors:#?}");
+        assert!(!warnings.is_empty());
+        // (b) A raw child, modelled listers: warnings.
+        let (errors, warnings) = findings(true, [false, false]);
+        assert!(errors.is_empty(), "{errors:#?}");
+        assert!(!warnings.is_empty());
+        // (c) A modelled child, one raw and one modelled lister: the
+        // modelled lister's finding is an error, the raw one's a warning.
+        let (errors, warnings) = findings(false, [true, false]);
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert!(errors[0].contains("DICTIONARY 52"), "{errors:#?}");
+        assert!(!warnings.is_empty());
     }
 
     /// An XRECORD's hard references are application data: one naming
