@@ -269,6 +269,13 @@ without `serde`, on the crate's `rust-version` (1.85) with warnings as
 errors: newer syntax such as let chains does not build there. It needs that
 toolchain (`rustup toolchain install 1.85`).
 
+CI (`.github/workflows/ci.yml`) runs on every pull request and on pushes
+to `main` and `develop`: it fetches the corpus once, runs the release tests
+(ignored ones included, with `OPENDWG_REQUIRE_CORPUS=1`) on Linux, Windows
+and macOS, the `serde` tests on Linux, `rustfmt`, `clippy` and `rustdoc`
+with warnings as errors, a build of the fuzz targets, and
+`scripts/check-msrv.sh`.
+
 ### Fuzzing
 
 `tests/mutation_fuzz.rs` runs in every `cargo test`: it mutates each corpus

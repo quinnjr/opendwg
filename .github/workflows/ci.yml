@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  # The sample drawings are not in the repository: download them once (cached
+  # until a manifest changes) and hand them to the test jobs as an artifact.
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: corpus/files
+          key: corpus-${{ hashFiles('corpus/manifest.toml', 'corpus/extended.toml') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/fetch-corpus.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corpus
+          path: corpus/files
+          retention-days: 1
+
+  test:
+    needs: corpus
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      OPENDWG_REQUIRE_CORPUS: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v5
+        with:
+          name: corpus
+          path: corpus/files
+      - run: cargo test --release --locked -- --include-ignored
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo test --release --locked --features serde
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --locked
+      - run: cargo clippy --all-targets --locked --features serde
+      - run: cargo doc --no-deps --document-private-items --locked --features serde
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+      # The fuzz targets are run with cargo-fuzz on nightly (see README); here
+      # they only have to keep compiling against the library.
+      - run: cargo check --manifest-path fuzz/Cargo.toml --all-targets --locked
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The toolchain named by rust-version in Cargo.toml.
+      - run: rustup toolchain install --profile minimal "$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)"
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/check-msrv.sh
