@@ -125,7 +125,7 @@ impl Repair {
     }
 
     /// Add `obj` under handle `h`, allocated with seed `seed` (see
-    /// [`next_handles`]): the seed moves past it.
+    /// [`next_handle_after`]): the seed moves past it.
     fn add(&mut self, h: Handle, seed: Handle, obj: Object) {
         self.objects.insert(h, obj);
         self.added.push(h);
