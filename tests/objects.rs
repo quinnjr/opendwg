@@ -6,7 +6,7 @@
 //! values that pin ODS deviations are asserted on real data.
 //!
 //! PLOTSETTINGS, ACAD_PROXY_OBJECT and LAYER_INDEX are not in the corpus;
-//! their unit tests in `src/object/objects.rs` are hermetic.
+//! their unit tests in `src/object/objects/` are hermetic.
 
 mod common;
 

@@ -699,15 +699,20 @@ impl Drawing {
 
     /// The model space block record: the header's, or the block record named
     /// `*Model_Space` when the header's is not a block record; null when
-    /// there is neither.
+    /// there is neither. The name is looked up in an index, so a header
+    /// that names no block record costs one read of the block table, not
+    /// one per call.
     pub fn model_space(&self) -> Handle {
         let h = self.header.block_record_model_space;
         if self.block_record(h).is_some() {
             return h;
         }
-        self.block_records()
-            .find(|(_, b)| names_eq(&b.entry.name, "*Model_Space"))
-            .map_or(Handle(0), |(h, _)| h)
+        // The name index takes the reference index's lock: callers holding
+        // it compute model space first (see `validate_written`).
+        self.table_named(TableKind::Block, "*Model_Space")
+            .into_iter()
+            .find(|&h| self.block_record(h).is_some())
+            .unwrap_or(Handle(0))
     }
 
     /// The paper space block records, in layout tab order: the block records
@@ -716,9 +721,10 @@ impl Drawing {
     pub fn paper_spaces(&self) -> Vec<Handle> {
         let ms = self.model_space();
         let mut out = Vec::new();
+        let mut seen = HashSet::new();
         let layouts = self.layouts().into_iter().map(|(_, l)| l.block_record);
         for b in layouts.chain([self.header.block_record_paper_space]) {
-            if b != ms && self.block_record(b).is_some() && !out.contains(&b) {
+            if b != ms && self.block_record(b).is_some() && seen.insert(b) {
                 out.push(b);
             }
         }
@@ -2578,6 +2584,50 @@ mod tests {
             assert_index_fresh(&d);
         }
         assert_eq!(deltas[0], deltas[1], "independent of the drawing's size");
+    }
+
+    /// A header whose model space names no block record (a damaged file):
+    /// model space is found by name in the name index, so `validate()` and
+    /// `write_diagnostics()` (whose passes look up the owner of every
+    /// entity) read the block table a fixed number of times, however many
+    /// entities there are.
+    #[test]
+    fn model_space_fallback_is_independent_of_the_entity_count() {
+        let mut work = vec![];
+        for n in [100, 1000] {
+            let mut d = Drawing::new();
+            for i in 0..50 {
+                d.add_block(&format!("B{i}")).unwrap();
+            }
+            let ms = d.model_space();
+            let lines: Vec<Handle> = (0..n).map(|i| line(&mut d, i)).collect();
+            d.header.block_record_model_space = Handle(0);
+            assert_eq!(d.model_space(), ms);
+            assert_eq!(d.owner_of(lines[0]), Some(ms));
+            let read = TABLE_ENTRIES_READ.get();
+            d.validate();
+            d.write_diagnostics();
+            work.push(TABLE_ENTRIES_READ.get() - read);
+        }
+        assert_eq!(work[0], work[1], "independent of the entity count");
+    }
+
+    /// `paper_spaces` lists each paper space block once, however many
+    /// layout dictionary entries name its layout (a damaged file).
+    #[test]
+    fn paper_spaces_lists_each_block_once() {
+        let mut d = Drawing::new();
+        let ps = d.header.block_record_paper_space;
+        let ms = d.model_space();
+        let dict = d.header.dict_layouts;
+        let entries = &mut d.get_mut(dict).unwrap().dictionary_mut().unwrap().entries;
+        let copies: Vec<(String, Handle)> = (0..10_000)
+            .flat_map(|i| entries.iter().map(move |(n, h)| (format!("{n}{i}"), *h)))
+            .collect();
+        entries.extend(copies);
+        assert!(d.layouts().len() > 10_000);
+        assert_eq!(d.paper_spaces(), [ps]);
+        assert!(!d.paper_spaces().contains(&ms));
     }
 
     /// Adding k layers to a table of 100 or of 1000 reads the table's names

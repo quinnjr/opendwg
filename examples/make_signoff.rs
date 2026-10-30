@@ -8,7 +8,9 @@
 //! ```
 //!
 //! Every drawing is read back before it is written out: one that does not
-//! read back with no diagnostic and no validation error stops the run.
+//! read back with no diagnostic and no validation error stops the run, and
+//! so does a drawing left out for any reason but an unfetched corpus (a
+//! corpus file that does not read or save), as in `tests/signoff.rs`.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -28,6 +30,15 @@ fn run(out: &Path, commit: &str, date: &str) -> Result<(), String> {
     let pack = pack::build(pack::LINES);
     if !pack.errors.is_empty() {
         return Err(pack.errors.join("\n"));
+    }
+    let failed: Vec<String> = pack
+        .skipped
+        .iter()
+        .filter(|(_, why)| !why.contains("fetch-corpus"))
+        .map(|(name, why)| format!("{name}: {why}"))
+        .collect();
+    if !failed.is_empty() {
+        return Err(failed.join("\n"));
     }
     for f in &pack.files {
         pack::reads_back_clean(f)?;

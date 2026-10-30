@@ -313,4 +313,22 @@ fn error_serializes_for_a_front_end() {
     );
     let io = json(&Error::Io(std::io::Error::other("disk")));
     assert_eq!(io["kind"], "Io");
+    // Errors about no object have no `handles`, even of a kind that can
+    // name objects.
+    let invalid = Error::Invalid(vec![opendwg::Diagnostic {
+        severity: opendwg::Severity::Error,
+        handle: None,
+        message: "no object".into(),
+    }]);
+    assert_eq!(invalid.handles(), None);
+    assert_eq!(
+        json(&invalid),
+        serde_json::json!({ "kind": "Invalid", "message": json(&invalid)["message"] })
+    );
+    let header_only = Error::InUse {
+        objects: vec![],
+        header_vars: vec!["$CLAYER"],
+    };
+    assert_eq!(header_only.handles(), None);
+    assert!(json(&header_only).get("handles").is_none());
 }

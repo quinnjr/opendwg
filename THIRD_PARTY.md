@@ -361,4 +361,5 @@ Not bundled or redistributed. Considered for round-trip verification by an indep
   clearly permitted, so CI must not download or run it; CI relies on the library's own tests
   instead. Ask ODA (support@opendesign.com) for written confirmation if CI use is wanted.
 - Use: `tests/oda.rs` runs a converter the developer installed (`ODA_FILE_CONVERTER` or `PATH`),
-  skips with a printed message when it is absent, and never runs it when `CI` is set.
+  skips with a printed message when it is absent, and never runs it when `CI` is set
+  to a value other than empty, `0` or `false`.

@@ -120,7 +120,7 @@
 //! |---|---|
 //! | AuxHeader | Always written (AutoCAD always writes it): the source's, converted to the R2018 layout (the three maintenance version fields AutoCAD widens from `RS` to `RL` in R2018; ODS puts the extra bytes at the end, the corpus shows them there), with version 33 (AC1032), $TDCREATE, $TDUPDATE and $HANDSEED updated. Without one, or with an unknown layout (a warning), the ODS 27 fields with one save (see `aux_default`). |
 //! | ObjFreeSpace | Always written. 2010+: copied (the 89-byte form), with $TDUPDATE updated and the object count raised to the objects written when that is larger. Before: regenerated in that form (ODS 21 with 64-bit values, as the corpus has them). The count is "approximate" (ODS) and AutoCAD's exceeds the objects stored (949 for 842 in the R2018 sample); a copied count left above the objects after removals is not lowered. Unconfirmed against AutoCAD: whether it accepts both. |
-//! | Template | Always written (ODS: mandatory from R2004). R2007+: copied (UTF-16 description). Before: converted (description re-encoded). Without one: an empty description. $MEASUREMENT is the header's when set, else the source's, else 0. A description too long for its 16-bit length is left empty, with a warning. |
+//! | Template | Always written (ODS: mandatory from R2004). R2007+: copied (UTF-16 description) while the header's $MEASUREMENT is the one read from it, else re-encoded with the header's. Before: converted (description re-encoded). Without one: an empty description. $MEASUREMENT is the header's when set, else the source's, else 0. A description too long for its 16-bit length is left empty, with a warning. |
 //! | RevHistory | Always written: copied (the same 16 bytes in every R2004+ corpus file), else ODS's R21 form (0, 0, 1, 0). |
 //! | AppInfoHistory | Copied (the same form from R2004 to R2018 in the corpus); its content is unknown, so without one none is written. |
 //! | AcDsPrototype | Decoded as [`Drawing::data_storage`] (R2013+; the same format in R2013 and R2018). Written as read while unchanged; otherwise encoded ([`DataStorage::encode`], a fresh layout, revision raised), with the records of ACIS entities converted from older versions added and the ACIS records of objects no longer written dropped. A drawing without one gets ODS's default content when it has converted ACIS entities, else none. An R2013+-form ACIS entity without its record fails the write with [`Error::Invalid`], unless it holds no data (converted from no data, or without a record when read); an entity set to no data loses its record. One that could not be decoded (R2013+) is copied unchecked (with a warning once ACIS entities read were removed), and then converted ACIS entities fail the write with [`Error::Invalid`]. A pre-R2013 source's own: left out with a warning (its form is unknown). |
@@ -2082,7 +2082,10 @@ fn template(
     let measurement = header.measurement.and_then(|m| u16::try_from(m).ok());
     let parsed = source.map(|b| parse_template(b, wide, header.dwgcodepage));
     let (description, read_measurement, warn) = match (source, parsed) {
-        (Some(b), Some(Some(_))) if wide && measurement.is_none() => return (b.to_vec(), None),
+        // Copied while $MEASUREMENT is the one read from it (or unset).
+        (Some(b), Some(Some((_, m)))) if wide && measurement.is_none_or(|h| h == m) => {
+            return (b.to_vec(), None);
+        }
         (_, Some(Some((d, m)))) => (d, m, None),
         (_, Some(None)) => (
             String::new(),
@@ -2259,9 +2262,20 @@ mod tests {
     fn template_forms() {
         let mut h = header();
         h.measurement = None;
-        // R2007+: copied as read.
-        let wide = [1, 0, 0, 0, 1, 0];
+        // R2007+: copied as read, while $MEASUREMENT is unset or the one
+        // read (here with text after the description's NUL, which a
+        // re-encoding would drop).
+        let wide = [3, 0, 0, 0, b'x', 0, 0, 0, 1, 0];
         assert_eq!(template(Some(&wide), Some(Version::R2018), &h).0, wide);
+        h.measurement = Some(1);
+        assert_eq!(template(Some(&wide), Some(Version::R2018), &h).0, wide);
+        // A changed $MEASUREMENT: re-encoded with it.
+        h.measurement = Some(0);
+        assert_eq!(
+            template(Some(&wide), Some(Version::R2018), &h).0,
+            [1, 0, 0, 0, 0, 0]
+        );
+        h.measurement = None;
         // Before R2007: re-encoded, the description in UTF-16.
         let narrow = [2, 0, b'A', b'B', 1, 0];
         let (t, warn) = template(Some(&narrow), Some(Version::R2004), &h);
@@ -2280,6 +2294,36 @@ mod tests {
         let (t, warn) = template(Some(&[9, 0]), Some(Version::R2000), &h);
         assert_eq!(t, [1, 0, 0, 0, 0, 0]);
         assert!(warn.is_some());
+    }
+
+    /// A read R2018 drawing saved unchanged keeps its Template byte for
+    /// byte, here one with text after the description's NUL that a
+    /// re-encoding would drop: $MEASUREMENT is the one read from it.
+    #[test]
+    fn read_template_is_copied() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("corpus/files/acadsharp-sample-ac1032.dwg");
+        if !p.is_file() {
+            assert!(
+                std::env::var("OPENDWG_REQUIRE_CORPUS").as_deref() != Ok("1"),
+                "OPENDWG_REQUIRE_CORPUS=1 but there is no corpus"
+            );
+            eprintln!("SKIPPED: no corpus; run scripts/fetch-corpus.sh");
+            return;
+        }
+        let bytes = std::fs::read(&p).unwrap();
+        let read = crate::container::read(&bytes).unwrap();
+        let mut d = Drawing::from_bytes(&bytes).unwrap();
+        let template =
+            |b: &[u8]| crate::container::read(b).unwrap().sections[&SectionName::Template].clone();
+        assert_eq!(
+            template(&d.to_bytes().unwrap()),
+            read.sections[&SectionName::Template]
+        );
+        let m = d.header.measurement.unwrap() as u8;
+        let odd = vec![3, 0, 0, 0, b'x', 0, 0, 0, m, 0];
+        d.extra_sections.insert(SectionName::Template, odd.clone());
+        assert_eq!(template(&d.to_bytes().unwrap()), odd);
     }
 
     /// A preview with one entry at `base + 30` of 4 bytes.

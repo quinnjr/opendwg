@@ -197,7 +197,8 @@ pub struct HatchSpline {
     /// R2010+ fit points (DXF 11); empty before.
     pub fit_points: Vec<[f64; 2]>,
     /// R2010+ start and end tangents (DXF 12, 13), stored only with fit
-    /// points; zero otherwise.
+    /// points; zero otherwise (writing non-zero tangents without fit points
+    /// fails with [`crate::Error::Encode`]).
     pub start_tangent: [f64; 2],
     pub end_tangent: [f64; 2],
 }
@@ -503,6 +504,13 @@ impl HatchSpline {
             if rational {
                 w.data.write_bd(weight);
             }
+        }
+        if self.fit_points.is_empty()
+            && (self.start_tangent != [0.0; 2] || self.end_tangent != [0.0; 2])
+        {
+            return Err(encode_err(
+                "a hatch spline edge stores its tangents only with fit points",
+            ));
         }
         write_2rd_list(w, &self.fit_points, "spline edge fit points")?;
         if !self.fit_points.is_empty() {
@@ -928,7 +936,8 @@ pub(crate) mod tests {
 
     /// An R2010+ spline edge stores its start and end tangents only after
     /// fit points (AutoCAD 2025's `export_sample.dwg`, as ACadSharp reads
-    /// them; ODS: always). Without fit points they are not written.
+    /// them; ODS: always). Without fit points they are not written, so
+    /// non-zero ones there are refused rather than dropped.
     #[test]
     fn spline_tangents_only_with_fit_points() {
         let without = |tangent: [f64; 2]| {
@@ -947,12 +956,8 @@ pub(crate) mod tests {
         let zero = without([0.0; 2]);
         assert_eq!(reread(&zero), zero);
         let stale = without([1.0, 2.0]);
-        let bytes = |h: &Hatch| {
-            let mut w = ObjWriter::new(Handle(0x80));
-            h.encode(&mut w).unwrap();
-            w.finish(type_code::HATCH).unwrap()
-        };
-        assert_eq!(bytes(&stale), bytes(&zero));
+        let mut w = ObjWriter::new(Handle(0x80));
+        assert!(matches!(stale.encode(&mut w), Err(crate::Error::Encode(_))));
         // With fit points they are kept.
         assert_eq!(reread(&hatch()), hatch());
     }

@@ -81,10 +81,15 @@ pub fn corpus_file(name: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// Whether `OPENDWG_REQUIRE_CORPUS=1`: a missing corpus file is then a failure.
+fn corpus_required() -> bool {
+    std::env::var("OPENDWG_REQUIRE_CORPUS").as_deref() == Ok("1")
+}
+
 /// Report a corpus skip. With `OPENDWG_REQUIRE_CORPUS=1` a missing corpus is a failure
 /// instead, so CI cannot pass vacuously.
 pub fn skip(what: &str) {
-    if std::env::var("OPENDWG_REQUIRE_CORPUS").as_deref() == Ok("1") {
+    if corpus_required() {
         panic!("OPENDWG_REQUIRE_CORPUS=1 but the corpus lacks {what}; run scripts/fetch-corpus.sh");
     }
     eprintln!("SKIPPED: the corpus lacks {what}; run scripts/fetch-corpus.sh");
@@ -99,12 +104,22 @@ pub fn corpus_file_or_skip(name: &str) -> Option<PathBuf> {
     p
 }
 
-/// All fetched corpus files as `(entry, path)`; unfetched entries are skipped.
+/// All fetched corpus files as `(entry, path)`; unfetched entries are skipped, or, with
+/// `OPENDWG_REQUIRE_CORPUS=1`, fail (see [`skip`]), so a partly fetched corpus cannot pass
+/// on fewer files.
 pub fn fetched_files() -> Vec<(Entry, PathBuf)> {
+    let required = corpus_required();
     load_manifest()
         .file
         .into_iter()
-        .filter_map(|e| corpus_file(&e.name).map(|p| (e, p)))
+        .filter_map(|e| {
+            let p = if required {
+                corpus_file_or_skip(&e.name)
+            } else {
+                corpus_file(&e.name)
+            };
+            p.map(|p| (e, p))
+        })
         .collect()
 }
 

@@ -410,14 +410,7 @@ fn describe_dictionary(d: &Dictionary) -> String {
 }
 
 /// Print the proxy graphics of the entity `handle`, one primitive per line.
-fn dump_proxy(bytes: &[u8], path: &str, raw: &container::RawSections, handle: Handle) -> ExitCode {
-    let d = match Drawing::from_bytes(bytes) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("dwgdump: {path}: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+fn dump_proxy(d: &Drawing, path: &str, raw: &container::RawSections, handle: Handle) -> ExitCode {
     let Some(Object::Entity { common, .. }) = d.get(handle) else {
         eprintln!("dwgdump: {path}: {handle} is not an entity");
         return ExitCode::FAILURE;
@@ -501,14 +494,19 @@ fn main() -> ExitCode {
             }
         }
     }
-    if show_objects {
-        let d = match Drawing::from_bytes(&bytes) {
-            Ok(d) => d,
+    // The drawing, decoded once for both `--objects` and `--proxy`.
+    let drawing = if show_objects || proxy.is_some() {
+        match Drawing::from_bytes(&bytes) {
+            Ok(d) => Some(d),
             Err(e) => {
                 eprintln!("dwgdump: {path}: {e}");
                 return ExitCode::FAILURE;
             }
-        };
+        }
+    } else {
+        None
+    };
+    if let (true, Some(d)) = (show_objects, &drawing) {
         println!("{} classes", d.classes.len());
         for c in &d.classes {
             println!(
@@ -555,8 +553,8 @@ fn main() -> ExitCode {
         }
     }
     // Last, as the usage lists it: with `--objects`, both are printed.
-    if let Some(handle) = proxy {
-        return dump_proxy(&bytes, path, &raw, handle);
+    if let (Some(handle), Some(d)) = (proxy, &drawing) {
+        return dump_proxy(d, path, &raw, handle);
     }
     ExitCode::SUCCESS
 }

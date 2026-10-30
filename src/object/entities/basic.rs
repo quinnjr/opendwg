@@ -6,7 +6,7 @@
 //! Where R2000+ files omit values equal to a default (the "zero" bits of
 //! LINE and 3DFACE, `BT` thickness, `BE` extrusion, `DD` coordinates), the
 //! encoder chooses the shortest form, as AutoCAD does; the corpus test
-//! `corpus_basic_r2018_bytes` checks that this reproduces AutoCAD's bytes.
+//! `corpus_basic_entities_r2018_bytes` checks that this reproduces AutoCAD's bytes.
 
 use super::super::stream::{ObjReader, ObjWriter};
 use super::super::tables::{HARD_POINTER, put};

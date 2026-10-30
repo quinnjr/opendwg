@@ -11,8 +11,6 @@
 //! - a drawing code page the crate cannot decode (R2000/R2004 text is then
 //!   read as Windows-1252);
 //! - header and classes warnings (lossy text, bits left unread);
-//! - an unreadable object map page after the first (the objects of the
-//!   pages before it are read);
 //! - object map entries outside the objects section or inside another
 //!   object, and duplicate handles (the first usable entry wins), skipped;
 //! - objects whose common data cannot be read (an `Error`; kept as stored,
@@ -113,6 +111,12 @@ fn warning(handle: Option<Handle>, message: String) -> Diagnostic {
 
 impl Drawing {
     /// Read a drawing from the bytes of a DWG file.
+    ///
+    /// A broken container (file header, section maps), header section,
+    /// classes section or object map (any of its pages) fails the read.
+    /// Objects that fail to decode are kept raw with warnings, and other
+    /// problems that do not stop the read become diagnostics (see the
+    /// module doc).
     pub fn from_bytes(bytes: &[u8]) -> Result<Drawing> {
         let mut raw = container::read(bytes)?;
         let version = raw.version;
@@ -137,21 +141,15 @@ impl Drawing {
         let (classes, class_diags) =
             classes::decode_with_diagnostics(&classes_bytes, version, codepage)?;
         diagnostics.extend(class_diags);
-        let (map, map_diags) = objmap::decode_with_diagnostics(&map_bytes)?;
-        diagnostics.extend(map_diags);
+        let map = objmap::decode(&map_bytes)?;
 
-        let mleader_style_marker = find_mleader_style_marker(
-            &map,
-            &objects_bytes,
-            raw.objects_base,
-            version,
-            codepage,
-            &classes,
-        );
+        let layout = MapLayout::new(&map, &objects_bytes, raw.objects_base, version);
+        let mleader_style_marker =
+            find_mleader_style_marker(&map, &layout, &objects_bytes, version, codepage, &classes);
         let mut ctx = DecodeCtx::new(version, codepage, &classes)
             .with_mleader_style_marker(mleader_style_marker);
         ctx.diagnostics = diagnostics;
-        let mut objects = read_objects(&map, &objects_bytes, raw.objects_base, &mut ctx);
+        let mut objects = read_objects(&map, &objects_bytes, raw.objects_base, &layout, &mut ctx);
         let mut diagnostics = ctx.diagnostics;
         let (mut summary, preview, app_info) = decode_info_sections(
             &mut raw.sections,
@@ -350,12 +348,13 @@ fn decode_data_storage(
 
 /// The APPID named ACAD_MLEADERVER, which marks pre-R2010 multileader
 /// styles in the new format (see [`DecodeCtx::mleader_style_marker`]); R2010+
-/// files need none. Every object's type is read and the APPIDs decoded; their
-/// problems are reported when the objects are read.
+/// files need none. The type of every object [`marker_candidates`] gives is
+/// read and the APPIDs decoded; their problems are reported when the objects
+/// are read.
 fn find_mleader_style_marker(
     map: &[(Handle, u64)],
+    layout: &MapLayout,
     objects: &[u8],
-    base: u64,
     version: Version,
     codepage: u16,
     classes: &[DxfClass],
@@ -363,11 +362,8 @@ fn find_mleader_style_marker(
     if version >= Version::R2010 {
         return None;
     }
-    map.iter().find_map(|&(h, loc)| {
-        let at = loc
-            .checked_sub(base)
-            .and_then(|o| usize::try_from(o).ok())
-            .and_then(|o| objects.get(o..))?;
+    marker_candidates(map, layout).find_map(|(h, off)| {
+        let at = &objects[off..];
         let (_, pre) = ObjReader::split(at, version, codepage).ok()?;
         if pre.type_code != type_code::APPID {
             return None;
@@ -381,6 +377,24 @@ fn find_mleader_style_marker(
             _ => None,
         }
     })
+}
+
+/// The map entries [`find_mleader_style_marker`] reads, with their offsets:
+/// those [`read_objects`] would decode by location (inside the objects
+/// section, not inside another object), each offset once. Every object's
+/// bytes are then read (its CRC computed) at most once, however many entries
+/// point at or into it.
+fn marker_candidates<'a>(
+    map: &'a [(Handle, u64)],
+    layout: &'a MapLayout,
+) -> impl Iterator<Item = (Handle, usize)> + 'a {
+    let mut seen = HashSet::new();
+    map.iter()
+        .zip(layout.offsets.iter().zip(&layout.inside))
+        .filter_map(move |(&(h, _), (&off, inside))| {
+            let off = off?;
+            (inside.is_none() && seen.insert(off)).then_some((h, off))
+        })
 }
 
 /// $MEASUREMENT, which the `AcDb:Template` section stores (ODS 22; the
@@ -927,7 +941,34 @@ fn unreadable(
     })
 }
 
-/// Decode the objects `map` lists. `base` is the location of `objects[0]` in
+/// Where the object map's entries point, computed once for both passes over
+/// the objects ([`find_mleader_style_marker`] and [`read_objects`]): for
+/// each entry, its offset in the objects section (`None` outside it) and
+/// the offset of an earlier object it lies inside (see
+/// [`containing_objects`]).
+struct MapLayout {
+    offsets: Vec<Option<usize>>,
+    inside: Vec<Option<usize>>,
+}
+
+impl MapLayout {
+    /// `base` is the location of `objects[0]` in the map's terms.
+    fn new(map: &[(Handle, u64)], objects: &[u8], base: u64, version: Version) -> MapLayout {
+        let offsets: Vec<Option<usize>> = map
+            .iter()
+            .map(|&(_, loc)| {
+                loc.checked_sub(base)
+                    .and_then(|o| usize::try_from(o).ok())
+                    .filter(|&o| o < objects.len())
+            })
+            .collect();
+        let inside = containing_objects(&offsets, |off| object_end(objects, off, version));
+        MapLayout { offsets, inside }
+    }
+}
+
+/// Decode the objects `map` lists, laid out as `layout` says. `base` is the
+/// location of `objects[0]` in
 /// the map's terms. Entries that cannot be used are skipped with a
 /// diagnostic whose message contains "skipped":
 ///
@@ -946,18 +987,10 @@ fn read_objects(
     map: &[(Handle, u64)],
     objects: &[u8],
     base: u64,
+    layout: &MapLayout,
     ctx: &mut DecodeCtx,
 ) -> BTreeMap<Handle, Object> {
-    let offsets: Vec<Option<usize>> = map
-        .iter()
-        .map(|&(_, loc)| {
-            loc.checked_sub(base)
-                .and_then(|o| usize::try_from(o).ok())
-                .filter(|&o| o < objects.len())
-        })
-        .collect();
-    let inside = containing_objects(&offsets, |off| object_end(objects, off, ctx.version));
-
+    let MapLayout { offsets, inside } = layout;
     let mut out = BTreeMap::new();
     for (i, &(h, loc)) in map.iter().enumerate() {
         let Some(off) = offsets[i] else {
@@ -1222,7 +1255,7 @@ mod tests {
             (Handle(0x13), u64::MAX),
         ];
         let mut c = ctx(&[]);
-        let out = read_objects(&map, &objects, 0, &mut c);
+        let out = read_all(&map, &objects, 0, &mut c);
         assert_eq!(
             out.keys().copied().collect::<Vec<_>>(),
             [Handle(0x10), Handle(0x11)]
@@ -1248,10 +1281,59 @@ mod tests {
         objects.extend(&good);
         let map = [(Handle(0x10), 0), (Handle(0x10), 4)];
         let mut c = ctx(&[]);
-        let out = read_objects(&map, &objects, 0, &mut c);
+        let out = read_all(&map, &objects, 0, &mut c);
         assert_eq!(out.len(), 1);
         assert_eq!(c.diagnostics.len(), 1);
         assert_eq!(c.diagnostics[0].severity, Severity::Error);
+    }
+
+    /// [`read_objects`] with the map's layout computed.
+    fn read_all(
+        map: &[(Handle, u64)],
+        objects: &[u8],
+        base: u64,
+        ctx: &mut DecodeCtx,
+    ) -> BTreeMap<Handle, Object> {
+        let layout = MapLayout::new(map, objects, base, ctx.version);
+        read_objects(map, objects, base, &layout, ctx)
+    }
+
+    /// Before R2010 the ACAD_MLEADERVER search reads objects too: it skips
+    /// the entries pointing at or into another object, as the object pass
+    /// does, so a map of many entries into one large object reads that
+    /// object once (not once per entry, a CRC over it each time).
+    #[test]
+    fn marker_search_skips_entries_inside_another_object() {
+        use crate::bits::BitWriter;
+        use crate::handle::HandleRef;
+        use crate::object::stream::tests::assemble;
+        let mut d = BitWriter::new();
+        d.write_handle_ref(HandleRef {
+            code: 0,
+            value: 0x10,
+        })
+        .unwrap();
+        d.write_bl(0); // reactors
+        d.write_bytes(&vec![0x55; 100_000]);
+        let mut hs = BitWriter::new();
+        hs.write_handle_ref(HandleRef { code: 4, value: 0 })
+            .unwrap();
+        let objects = assemble(Version::R2004, type_code::VBA_PROJECT, &d, None, &hs);
+        let mut map = vec![(Handle(0x10), 0)];
+        for i in 0..50_000u64 {
+            // At the object itself, or inside it.
+            map.push((Handle(0x100 + i), i % 2 * (i % 90_000)));
+        }
+        map.push((Handle(0x9_0000), u64::MAX)); // outside the section
+        let layout = MapLayout::new(&map, &objects, 0, Version::R2004);
+        assert_eq!(
+            marker_candidates(&map, &layout).collect::<Vec<_>>(),
+            [(Handle(0x10), 0)]
+        );
+        assert_eq!(
+            find_mleader_style_marker(&map, &layout, &objects, Version::R2004, 30, &[]),
+            None
+        );
     }
 
     #[test]
@@ -1286,7 +1368,7 @@ mod tests {
         assert_eq!(inside.iter().filter(|i| i.is_some()).count(), 50_000);
         // ...and only it is decoded: every other entry is skipped unread.
         let mut c = ctx(&[]);
-        let out = read_objects(&map, &objects, 0, &mut c);
+        let out = read_all(&map, &objects, 0, &mut c);
         assert_eq!(out.len(), 1);
         assert_eq!(c.diagnostics.len(), 50_000);
         assert!(c.diagnostics.iter().all(|d| {
@@ -1300,7 +1382,7 @@ mod tests {
         let mut objects = dictionary(0x10);
         objects.truncate(objects.len() - 3);
         let mut c = ctx(&[]);
-        let out = read_objects(&[(Handle(0x10), 0)], &objects, 0, &mut c);
+        let out = read_all(&[(Handle(0x10), 0)], &objects, 0, &mut c);
         assert!(out.is_empty());
         assert_eq!(c.diagnostics.len(), 1);
         assert_eq!(c.diagnostics[0].severity, Severity::Error);
@@ -1319,7 +1401,7 @@ mod tests {
         let at = objects.len();
         objects.extend(&bad);
         let mut c = ctx(&[]);
-        let out = read_objects(
+        let out = read_all(
             &[(Handle(0x10), 0), (Handle(0x11), at as u64)],
             &objects,
             0,
@@ -1363,7 +1445,7 @@ mod tests {
     fn base_offset_is_subtracted() {
         let objects = dictionary(0x10);
         let mut c = ctx(&[]);
-        let out = read_objects(
+        let out = read_all(
             &[(Handle(0x10), 100), (Handle(0x11), 99), (Handle(0x12), 103)],
             &objects,
             100,

@@ -81,6 +81,16 @@ pub fn debug_diff(a: &Object, b: &Object) -> String {
     format!("\n  {}\n  {}", window(&a), window(&b))
 }
 
+/// The handles that have a data storage record in `d`, for
+/// [`undo_refreshes`]: a set, so that each object's lookup is constant
+/// time rather than a scan of the records.
+pub fn record_handles(d: &Drawing) -> HashSet<Handle> {
+    d.data_storage
+        .as_ref()
+        .map(|s| s.records.iter().map(|r| r.handle).collect())
+        .unwrap_or_default()
+}
+
 /// `b`, the object `h` read back, with the documented writer refreshes
 /// undone so it can be compared with the object as read: entries for the
 /// objects the writer added (a repaired `Standard` dimension style, an
@@ -99,9 +109,11 @@ pub fn debug_diff(a: &Object, b: &Object) -> String {
 /// AutoCAD 2002/2004's null-owner round-trip dictionaries (`arx-02/03`),
 /// and the ODA-based `gdal-02`'s data storage flags. Returns both, `o`
 /// without the dictionary entries of objects the writer leaves out.
+/// `records` is [`record_handles`] of `back`, built once per drawing.
 pub fn undo_refreshes(
     d: &Drawing,
     back: &Drawing,
+    records: &HashSet<Handle>,
     o: &Object,
     b: &Object,
     warned: &HashSet<Handle>,
@@ -139,10 +151,7 @@ pub fn undo_refreshes(
             bc.entmode = oc.entmode;
         }
     }
-    let has_record = back
-        .data_storage
-        .as_ref()
-        .is_some_and(|s| s.records.iter().any(|r| r.handle == h));
+    let has_record = records.contains(&h);
     if b.object_common().has_ds_binary_data == has_record {
         b.object_common_mut().has_ds_binary_data = o.object_common().has_ds_binary_data;
     }

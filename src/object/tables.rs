@@ -28,9 +28,12 @@
 //! - DIMSTYLE: DIMCLRD, DIMCLRE and DIMCLRT are `CMC` (ODS: `BS`, which is
 //!   the same bits before R2004; as ACadSharp `readDimStyle` reads them).
 //!
-//! Unconfirmed by the corpus, which has no xrefs: the ODS reading of xref
-//! BLOCK_HEADERs (no first/last entity before R2004; ACadSharp also skips the
-//! R2004+ owned-object count for them, ODS does not, and ODS is followed).
+//! - BLOCK_HEADER: an xref block stores no R2004+ owned-object count (ODS:
+//!   always; as ACadSharp `readBlockHeader` reads it, and as Civil 3D's xref
+//!   block in `camber-26` confirms).
+//!
+//! Unconfirmed by the corpus, which has no pre-R2004 xrefs: the ODS reading
+//! of xref BLOCK_HEADERs before R2004 (no first/last entity).
 
 use super::stream::{ObjReader, ObjWriter};
 use crate::bits::Color;
