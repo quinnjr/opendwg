@@ -148,6 +148,13 @@ const KNOWN_CLASSES: [(&str, &str, &str, u16, u16, u32, u32); 29] = [
     ("LARGE_RADIAL_DIMENSION", "AcDbRadialDimensionLarge", "ObjectDBX Classes", 0x401, ITEM_CLASS_ENTITY, 25, 0),
 ];
 
+/// The DXF names of the classes the library has a definition of (see
+/// [`known_class`]), for tests that go through them all.
+#[cfg(test)]
+pub(crate) fn known_class_names() -> impl Iterator<Item = &'static str> {
+    KNOWN_CLASSES.iter().map(|c| c.0)
+}
+
 /// The definition of the class named `dxf_name` among the class types the
 /// library models (see [`KNOWN_CLASSES`]), numbered `number`, with no
 /// instances.
@@ -318,8 +325,25 @@ fn decode_counted(
 }
 
 /// Encode the classes section in R2018 form, including the 8 zero bytes
-/// R2004+ files have after the end sentinel.
+/// R2004+ files have after the end sentinel. A class number below 500 or
+/// used twice is [`Error::Encode`]: the decoder refuses the one and drops
+/// the other.
 pub fn encode_r2018(classes: &[DxfClass]) -> Result<Vec<u8>> {
+    let mut numbers = ClassNumbers::new();
+    for c in classes {
+        if c.class_number < FIRST_CLASS_NUMBER {
+            return Err(encode_err(&format!(
+                "class number {} ({}) is below {FIRST_CLASS_NUMBER}",
+                c.class_number, c.dxf_name
+            )));
+        }
+        if !numbers.insert(c.class_number) {
+            return Err(encode_err(&format!(
+                "class number {} ({}) is used twice",
+                c.class_number, c.dxf_name
+            )));
+        }
+    }
     let mut w = ObjWriter::new(Handle(0));
     let max = classes
         .iter()
@@ -571,6 +595,18 @@ mod tests {
             decode(&bytes, Version::R2000, 30),
             Err(Error::Corrupt(_))
         ));
+    }
+
+    /// What the decoder refuses or drops is not encoded.
+    #[test]
+    fn unreadable_class_numbers_are_not_encoded() {
+        let mut low = sample();
+        low[0].class_number = 499;
+        assert!(matches!(encode_r2018(&low), Err(Error::Encode(m)) if m.contains("499")));
+        let mut twice = sample();
+        assert!(twice.len() >= 2);
+        twice[1].class_number = twice[0].class_number;
+        assert!(matches!(encode_r2018(&twice), Err(Error::Encode(m)) if m.contains("twice")));
     }
 
     #[test]

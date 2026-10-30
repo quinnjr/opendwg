@@ -12,9 +12,10 @@
 //! - edits whose result is unverified: a converted pre-R2010 table style
 //!   whose data text height is not 0.18, a dimension under a style whose
 //!   DIMLFAC is not 1, edited after a read, an R2004 solid made a BODY
-//!   (written without a history handle), and an MTEXT with a text frame
-//!   and no fill (the default background data the reader gives an R2013
-//!   one).
+//!   (written without a history handle), an MTEXT with a text frame and
+//!   no fill (the default background data the reader gives an R2013 one),
+//!   and an R2010 drawing with solids whose every handle is moved (its
+//!   data storage records must follow their entities).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -386,13 +387,17 @@ pub fn new_files(pack: &mut Pack, lines: usize) {
         "A new drawing with one of every kind of object opendwg can create: lines, \
          circles, arcs, text, multiline text, blocks with attributes, polylines, splines, \
          every dimension kind, a leader and a multileader, hatches, an image, a wipeout, \
-         an OLE frame and a layout viewport."
+         an OLE frame, a proxy entity and a layout viewport."
             .into(),
         vec![
             "The image refers to `logo.png`, which does not exist: a \"file not found\" \
              image frame is expected."
                 .into(),
             "The OLE frame holds dummy data: it may show as an empty box.".into(),
+            "The proxy entity (class `ACME_SHAPE` of the absent application `AcmeApp`) has \
+             no data or graphics: a proxy information notice on opening, and nothing drawn, \
+             are expected."
+                .into(),
         ],
     );
     push(
@@ -406,8 +411,10 @@ pub fn new_files(pack: &mut Pack, lines: usize) {
     );
 }
 
-/// The edits: `edit_table_style.dwg` (from [`TABLE_STYLE_SOURCE`]) and
-/// `edit_dimlfac.dwg`.
+/// The edits: `edit_table_style.dwg` (from [`TABLE_STYLE_SOURCE`]),
+/// `edit_dimlfac.dwg`, the BODY edit ([`BODY_EDIT`], from [`BODY_SOURCE`]),
+/// the MTEXT frame edit ([`MTEXT_FRAME_EDIT`]) and the renumbered edit
+/// ([`RENUMBERED`], from [`RENUMBER_SOURCE`]).
 pub fn edit_files(pack: &mut Pack) {
     match table_style_edit() {
         Ok(Some(f)) => pack.files.push(f),

@@ -5,9 +5,10 @@ use crate::handle::Handle;
 
 /// Everything that can go wrong reading, editing or writing a drawing.
 ///
-/// Reading fails only when the container is unusable (see
-/// [`crate::Drawing::from_bytes`]); problems with single objects become
-/// [`crate::Diagnostic`]s instead. Writing fails on objects AutoCAD 2018
+/// Reading fails when the container (file header, section maps), the header
+/// section, the classes section or the object map is broken (see
+/// [`crate::Drawing::from_bytes`]); objects that fail to decode are kept
+/// raw, and problems with them become [`crate::Diagnostic`]s instead. Writing fails on objects AutoCAD 2018
 /// cannot store ([`Error::UnconvertibleObjects`]), on a drawing
 /// [`crate::Drawing::validate`] finds errors in ([`Error::Invalid`]) and on
 /// values a field cannot hold ([`Error::Encode`]). The editing methods
@@ -81,7 +82,8 @@ pub enum Error {
     NotFound(Handle),
     /// The drawing, or the change asked for, is invalid: the error
     /// diagnostics saying why (from [`crate::Drawing::validate`] or the
-    /// editing method).
+    /// editing method); from a save, preceded by the warnings of the
+    /// required objects the writer could not add, saying why.
     #[error("drawing is invalid: {} diagnostic(s): {}", .0.len(), first_diagnostics(.0))]
     Invalid(Vec<Diagnostic>),
 }
@@ -111,15 +113,18 @@ impl Error {
 
     /// The objects the error is about: the unconvertible objects, the
     /// objects still using one, the one not found, the objects of the
-    /// diagnostics; `None` for errors about no object.
+    /// diagnostics; `None` for errors about no object (an [`Error::InUse`]
+    /// by header variables only, an [`Error::Invalid`] whose diagnostics
+    /// name no object, and the other kinds).
     pub fn handles(&self) -> Option<Vec<Handle>> {
-        match self {
-            Error::UnconvertibleObjects(list) => Some(list.iter().map(|&(h, _)| h).collect()),
-            Error::InUse { objects, .. } => Some(objects.clone()),
-            Error::NotFound(h) => Some(vec![*h]),
-            Error::Invalid(diags) => Some(diags.iter().filter_map(|d| d.handle).collect()),
-            _ => None,
-        }
+        let handles: Vec<Handle> = match self {
+            Error::UnconvertibleObjects(list) => list.iter().map(|&(h, _)| h).collect(),
+            Error::InUse { objects, .. } => objects.clone(),
+            Error::NotFound(h) => vec![*h],
+            Error::Invalid(diags) => diags.iter().filter_map(|d| d.handle).collect(),
+            _ => return None,
+        };
+        (!handles.is_empty()).then_some(handles)
     }
 }
 

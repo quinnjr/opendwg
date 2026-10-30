@@ -22,7 +22,7 @@
 
 use crate::bits::BitReader;
 use crate::codec::crc16;
-use crate::diag::{Diagnostic, Severity};
+use crate::diag::Diagnostic;
 use crate::error::{Error, Result};
 use crate::handle::Handle;
 
@@ -52,7 +52,8 @@ fn be16(bytes: &[u8], at: usize) -> Result<u16> {
 
 /// Decode the object map into `(handle, location)` pairs in file order.
 /// Duplicate handles are returned as stored; the caller decides. Any bad
-/// page is an error; see [`decode_with_diagnostics`] for a lenient read.
+/// page, the first or a later one, is an error: a malformed map is refused,
+/// not read in part.
 pub fn decode(bytes: &[u8]) -> Result<ObjectMap> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -62,37 +63,11 @@ pub fn decode(bytes: &[u8]) -> Result<ObjectMap> {
     Ok(out)
 }
 
-/// Like [`decode`], but a bad page after at least one good one ends the map
-/// with a warning: the pairs of the good pages are returned (a partial
-/// drawing rather than none). A bad first page is still an error.
+/// [`decode`], with the diagnostics of the read: none, since every bad page
+/// is an error (a bad page after the first is no longer read leniently).
+/// Kept for callers that take the diagnostics.
 pub fn decode_with_diagnostics(bytes: &[u8]) -> Result<(ObjectMap, Vec<Diagnostic>)> {
-    let mut out = Vec::new();
-    let mut pos = 0usize;
-    let mut pages = 0usize;
-    loop {
-        let mut page = Vec::new();
-        match decode_page(bytes, pos, &mut page) {
-            Ok(Some(next)) => {
-                out.append(&mut page);
-                pos = next;
-                pages += 1;
-            }
-            Ok(None) => return Ok((out, Vec::new())),
-            Err(e) if pages > 0 => {
-                let warning = Diagnostic {
-                    severity: Severity::Warning,
-                    handle: None,
-                    message: format!(
-                        "object map: page {} at byte {pos} unreadable ({e}); the objects \
-                         of later pages are missing",
-                        pages + 1
-                    ),
-                };
-                return Ok((out, vec![warning]));
-            }
-            Err(e) => return Err(e),
-        }
-    }
+    decode(bytes).map(|map| (map, Vec::new()))
 }
 
 /// Decode the page at `pos`, appending its pairs to `out`. Returns the
@@ -305,23 +280,25 @@ mod tests {
         assert!(matches!(decode(&bytes), Err(Error::BadCrc { .. })));
     }
 
+    /// A bad page is refused wherever it is: the first, a later one, or a
+    /// map cut short after a good page.
     #[test]
-    fn bad_later_page_keeps_earlier_pages_with_a_warning() {
+    fn bad_later_page_is_refused() {
         let mut bytes = page(&[(5, 100), (1, 40)]);
         let mut second = page(&[(8, 30)]);
         second[2] ^= 1;
         bytes.extend(second);
         bytes.extend(end_page());
         assert!(matches!(decode(&bytes), Err(Error::BadCrc { .. })));
-        let (map, diags) = decode_with_diagnostics(&bytes).unwrap();
-        assert_eq!(map, [(Handle(5), 100), (Handle(6), 140)]);
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("page 2"), "{}", diags[0].message);
-        // Truncated after the first page: also partial.
+        assert!(matches!(
+            decode_with_diagnostics(&bytes),
+            Err(Error::BadCrc { .. })
+        ));
+        // Truncated after the first page.
         let first = page(&[(5, 100)]);
-        let (map, diags) = decode_with_diagnostics(&first).unwrap();
-        assert_eq!((map.len(), diags.len()), (1, 1));
-        // A bad first page is an error.
+        assert!(matches!(decode(&first), Err(Error::Truncated { .. })));
+        assert!(decode_with_diagnostics(&first).is_err());
+        // A bad first page.
         let mut bytes = page(&[(5, 100)]);
         bytes[2] ^= 1;
         bytes.extend(end_page());
@@ -329,7 +306,10 @@ mod tests {
         // A good map has no warning.
         let mut bytes = page(&[(5, 100)]);
         bytes.extend(end_page());
-        assert_eq!(decode_with_diagnostics(&bytes).unwrap().1, []);
+        assert_eq!(
+            decode_with_diagnostics(&bytes).unwrap(),
+            (vec![(Handle(5), 100)], vec![])
+        );
     }
 
     #[test]

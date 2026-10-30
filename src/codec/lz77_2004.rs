@@ -195,6 +195,7 @@ pub(crate) fn decompress_into(src: &[u8], expected_len: usize, out: &mut Vec<u8>
             }
         };
 
+        debug_assert!(dist <= DECODE_WINDOW, "the opcodes reach no further");
         if dist > out.len() - base {
             return Err(corrupt("back-reference before start of output"));
         }
@@ -248,15 +249,37 @@ fn usable(len: usize, dist: usize) -> bool {
     if dist <= 0x400 { len >= 4 } else { len >= 5 }
 }
 
-fn find_matches(src: &[u8]) -> Vec<Match> {
+/// The matcher's hash chains: the last position of each hash, and each
+/// position's previous one with the same hash. Kept by a [`Compressor`] so
+/// that compressing many pages allocates them once.
+#[derive(Debug, Default)]
+struct Chains {
+    head: Vec<u32>,
+    prev: Vec<u32>,
+}
+
+impl Chains {
+    /// Empty chains for an input of `n` bytes. `prev` needs no clearing: a
+    /// position's entry is set when the position is inserted, before it is
+    /// read.
+    fn reset(&mut self, n: usize) -> (&mut [u32], &mut [u32]) {
+        self.head.clear();
+        self.head.resize(1 << HASH_BITS, u32::MAX);
+        if self.prev.len() < n {
+            self.prev.resize(n, u32::MAX);
+        }
+        (&mut self.head, &mut self.prev[..n])
+    }
+}
+
+fn find_matches(src: &[u8], chains: &mut Chains) -> Vec<Match> {
     let n = src.len();
     let mut matches = Vec::new();
     if n < 8 {
         return matches;
     }
     debug_assert!(n < u32::MAX as usize, "positions are stored as u32");
-    let mut head = vec![u32::MAX; 1 << HASH_BITS];
-    let mut prev = vec![u32::MAX; n];
+    let (head, prev) = chains.reset(n);
     let insert = |head: &mut [u32], prev: &mut [u32], p: usize| {
         if p + 3 <= n {
             let h = hash3(&src[p..]);
@@ -296,12 +319,12 @@ fn find_matches(src: &[u8]) -> Vec<Match> {
             Some((len, dist)) => {
                 matches.push(Match { pos, len, dist });
                 for p in pos..pos + len {
-                    insert(&mut head, &mut prev, p);
+                    insert(head, prev, p);
                 }
                 pos += len;
             }
             None => {
-                insert(&mut head, &mut prev, pos);
+                insert(head, prev, pos);
                 pos += 1;
             }
         }
@@ -403,7 +426,28 @@ fn encode(src: &[u8], matches: &[Match]) -> Vec<u8> {
 
 /// Compress into the R2004 LZ77 format. Deterministic.
 pub fn compress(src: &[u8]) -> Vec<u8> {
-    encode(src, &find_matches(src))
+    Compressor::new().compress(src)
+}
+
+/// A compressor whose matcher buffers (a 128 KiB hash table and a chain
+/// entry per input byte) are reused across inputs: the R2018 writer
+/// compresses every page of a file with one. Its output is
+/// [`compress`]'s, byte for byte.
+#[derive(Debug, Default)]
+pub struct Compressor {
+    chains: Chains,
+}
+
+impl Compressor {
+    /// A compressor with no buffers yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Compress `src` (see [`compress`]).
+    pub fn compress(&mut self, src: &[u8]) -> Vec<u8> {
+        encode(src, &find_matches(src, &mut self.chains))
+    }
 }
 
 #[cfg(test)]
@@ -421,6 +465,33 @@ mod tests {
                 (s >> 8) as u8
             })
             .collect()
+    }
+
+    /// A reused compressor gives the output of a fresh one, whatever the
+    /// inputs before (longer, shorter, alike or not).
+    #[test]
+    fn reused_compressor_is_byte_identical() {
+        let text: Vec<u8> = b"the quick brown fox jumps over the lazy dog. "
+            .iter()
+            .copied()
+            .cycle()
+            .take(0x7400)
+            .collect();
+        let mut mixed = noise(0x3000, 7);
+        mixed.extend_from_slice(&text[..0x2000]);
+        let inputs = [
+            text.clone(),
+            noise(0x7400, 1),
+            text[..100].to_vec(),
+            mixed,
+            vec![0; 0x7400],
+            noise(5, 3),
+            text[7..0x5000].to_vec(),
+        ];
+        let mut c = Compressor::new();
+        for x in &inputs {
+            assert_eq!(c.compress(x), compress(x), "len {}", x.len());
+        }
     }
 
     fn rt(x: &[u8]) {
@@ -646,7 +717,11 @@ mod tests {
         let mut src = pat.clone();
         src.extend(noise(0xBFFF - 32, 4242));
         src.extend(&pat);
-        assert!(find_matches(&src).iter().all(|m| m.dist <= 0x7FFF));
+        assert!(
+            find_matches(&src, &mut Chains::default())
+                .iter()
+                .all(|m| m.dist <= 0x7FFF)
+        );
         rt(&src);
     }
 

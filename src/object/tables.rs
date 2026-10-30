@@ -28,9 +28,12 @@
 //! - DIMSTYLE: DIMCLRD, DIMCLRE and DIMCLRT are `CMC` (ODS: `BS`, which is
 //!   the same bits before R2004; as ACadSharp `readDimStyle` reads them).
 //!
-//! Unconfirmed by the corpus, which has no xrefs: the ODS reading of xref
-//! BLOCK_HEADERs (no first/last entity before R2004; ACadSharp also skips the
-//! R2004+ owned-object count for them, ODS does not, and ODS is followed).
+//! - BLOCK_HEADER: an xref block stores no R2004+ owned-object count (ODS:
+//!   always; as ACadSharp `readBlockHeader` reads it, and as Civil 3D's xref
+//!   block in `camber-26` confirms).
+//!
+//! Unconfirmed by the corpus, which has no pre-R2004 xrefs: the ODS reading
+//! of xref BLOCK_HEADERs before R2004 (no first/last entity).
 
 use super::stream::{ObjReader, ObjWriter};
 use crate::bits::Color;
@@ -316,10 +319,12 @@ pub enum EntityList {
         last: Handle,
     },
     /// R2004+: every entity, in order. They are written as hard owners
-    /// (code 3) for a block record, an INSERT and every POLYLINE, and as
-    /// soft pointers (code 4) for an MINSERT, as ODS gives them (ODS gives
-    /// soft pointers for polyface and polygon mesh vertices too; the corpus
-    /// has hard owners, see `entities::poly`).
+    /// (code 3) for a block record, an INSERT and every POLYLINE (ODS gives
+    /// soft pointers for polyface and polygon mesh vertices; the corpus has
+    /// hard owners, see `entities::poly`). An MINSERT's attributes are
+    /// written with the absolute code they were read with
+    /// ([`crate::object::MInsert::read_attrib_code`]), else as soft pointers
+    /// (code 4), as ODS gives them.
     Owned(Vec<Handle>),
 }
 

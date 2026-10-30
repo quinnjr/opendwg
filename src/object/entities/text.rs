@@ -1005,10 +1005,10 @@ fn parse_column_xdata(items: &[XDataItem], extents_height: f64) -> Option<Option
     } else {
         Vec::new()
     };
-    if let [h] = heights.as_mut_slice()
-        && h.to_bits() == 0
-    {
-        *h = -extents_height;
+    if let [h] = heights.as_mut_slice() {
+        if h.to_bits() == 0 {
+            *h = -extents_height;
+        }
     }
     Some(Some(MTextColumns {
         column_type,

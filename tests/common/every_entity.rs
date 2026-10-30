@@ -6,15 +6,17 @@ use opendwg::bits::Color;
 use opendwg::object::{
     ATTRIB_SINGLE_LINE, Arc, AsRead, AttDef, Attrib, BoundaryPath, CLIP_RECTANGLE, Circle,
     Dictionary, DimCommon, DimKind, Dimension, Ellipse, Entity, EntityCommon, EntityList, Face3d,
-    Hatch, HatchEdge, HatchGradient, HatchPattern, HatchVertex, Image, ImageDef, Insert,
-    LWPOLYLINE_CLOSED, Leader, LeaderLine, LeaderRoot, Line, LwPolyline, MInsert, MLeaderContent,
-    MLeaderContext, MLeaderText, MLine, MLineElement, MLineVertex, MText, MultiLeader,
-    NonGraphical, ORDINATE_X, Object, Ole2Frame, PATH_POLYLINE, PathEdges, Point, PolyfaceMesh,
-    PolygonMesh, Polyline2d, Polyline3d, PolylinePath, RasterVariables, Ray,
-    SPLINE_FLAGS1_METHOD_FIT, SPLINE_FLAGS1_USE_KNOT_PARAMETER, SPLINE_KNOT_CHORD,
+    HandleTail, Hatch, HatchEdge, HatchGradient, HatchPattern, HatchVertex, Image, ImageDef,
+    Insert, LWPOLYLINE_CLOSED, Leader, LeaderLine, LeaderRoot, Line, LwPolyline, MInsert,
+    MLeaderContent, MLeaderContext, MLeaderText, MLine, MLineElement, MLineVertex, MText,
+    MultiLeader, NonGraphical, ORDINATE_X, Object, Ole2Frame, PATH_POLYLINE, PathEdges, Point,
+    PolyfaceMesh, PolygonMesh, Polyline2d, Polyline3d, PolylinePath, ProxyEntity, RasterVariables,
+    Ray, SPLINE_FLAGS1_METHOD_FIT, SPLINE_FLAGS1_USE_KNOT_PARAMETER, SPLINE_KNOT_CHORD,
     SPLINE_KNOT_CUSTOM, Shape, Solid, Spline, SplineControl, SplineFit, SplineForm, TableEntry,
     Text, TextStyle, Tolerance, Vertex2d, Vertex3d, VertexPfaceFace, Viewport, Xline,
 };
+use opendwg::section::DxfClass;
+use opendwg::section::classes::ITEM_CLASS_ENTITY;
 use opendwg::{Drawing, Handle};
 
 pub fn dictionary_entries(d: &Drawing, h: Handle) -> Vec<(String, Handle)> {
@@ -385,7 +387,8 @@ pub fn multileader(style: Handle, text_style: Handle) -> MultiLeader {
 /// aside: without data they need a data storage record) added through the
 /// public API, with the objects they use (a block with attribute
 /// definitions, a shape file, an image definition with its dictionary and
-/// raster variables, a dimension style's dimensions, a multiline style).
+/// raster variables, a dimension style's dimensions, a multiline style, the
+/// class of the proxy entity's application).
 pub fn with_every_entity(d: Drawing) -> (Drawing, EveryEntity) {
     let mut d = d;
     let ms = d.model_space();
@@ -905,6 +908,44 @@ pub fn with_every_entity(d: Drawing) -> (Drawing, EveryEntity) {
         &mut d,
         ps,
         Entity::Viewport(Box::new(viewport([5.5, 4.25, 0.0], 9.0, 6.0))),
+    );
+
+    // A proxy entity of an application class the drawing lists (as
+    // `gdal-02`'s proxies name theirs), with no data of its own.
+    let number = d
+        .classes
+        .iter()
+        .map(|c| c.class_number)
+        .max()
+        .unwrap_or(499)
+        + 1;
+    d.classes.push(DxfClass {
+        class_number: number,
+        proxy_flags: 0,
+        app_name: "AcmeApp".into(),
+        cpp_class_name: "AcmeShape".into(),
+        dxf_name: "ACME_SHAPE".into(),
+        was_zombie: true,
+        item_class_id: ITEM_CLASS_ENTITY,
+        instance_count: 0,
+        dwg_version: 0,
+        maintenance_version: 0,
+        unknown: [0; 2],
+    });
+    add(
+        &mut d,
+        ms,
+        Entity::ProxyEntity(Box::new(ProxyEntity {
+            class_id: i32::from(number),
+            version: 33,
+            maintenance_version: 0,
+            original_data_is_dxf: false,
+            data: Vec::new(),
+            data_bits: 0,
+            strings: None,
+            object_ids: Vec::new(),
+            handle_tail: HandleTail::default(),
+        })),
     );
     (
         d,

@@ -8,7 +8,8 @@
 //! or adds, which a second save keeps), or holds objects R2018 cannot store
 //! and is refused with [`Error::UnconvertibleObjects`]. Every other file is
 //! refused with [`Error::UnsupportedVersion`]. Then feature tests: xrefs,
-//! GBK text, and Civil 3D objects kept byte for byte.
+//! GBK, Big5 and Shift-JIS text, and Civil 3D and Map 3D objects kept byte
+//! for byte.
 //!
 //! The files are fetched by `scripts/fetch-corpus.sh`; a missing one is
 //! skipped (a failure with `OPENDWG_REQUIRE_CORPUS=1`).
@@ -179,6 +180,7 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
     // Every object kept reads back with its value, the documented writer
     // refreshes aside (see `common::model::undo_refreshes`).
     let warned: HashSet<Handle> = warnings.iter().filter_map(|w| w.handle).collect();
+    let records = common::model::record_handles(&back);
     let mut differ = Vec::new();
     for (h, o) in d.objects() {
         let Some(b) = back.get(h) else { continue };
@@ -197,7 +199,7 @@ fn check(e: &common::Entry, path: &PathBuf) -> Result<String, String> {
             }
             continue;
         }
-        let (o, b) = common::model::undo_refreshes(&d, &back, o, b, &warned);
+        let (o, b) = common::model::undo_refreshes(&d, &back, &records, o, b, &warned);
         let o = &o;
         if !common::model::same_object(&d, h, o, &b) {
             let shown = match common::model::as_r2018(&d, h, o) {
@@ -338,12 +340,97 @@ fn gbk_text_decodes() {
     }
 }
 
+/// Big5 (ANSI_950) and Shift-JIS (ANSI_932) drawings: an R2000 file from a
+/// Traditional Chinese AutoCAD (text in the code page) and a Japanese
+/// AutoCAD 2026 file (UTF-16 text, Shift-JIS code page).
+#[test]
+fn big5_and_shift_jis_text_decodes() {
+    if let Some(d) = open("tw-01") {
+        assert_eq!(d.header.dwgcodepage, 41);
+        assert!(d.layouts().iter().any(|(_, l)| l.name == "配置1"));
+    }
+    if let Some(d) = open("peta-03") {
+        assert_eq!(d.header.dwgcodepage, 38);
+        assert!(d.layouts().iter().any(|(_, l)| l.name == "レイアウト1"));
+        assert!(d.objects().any(|(_, o)| matches!(o,
+            Object::Entity { entity: Entity::Text(t), .. } if t.value == "あいうえおアイウエオ")));
+    }
+}
+
+/// Map 3D object data (IRD_* classes) in a Civil 3D 2026 drawing is kept
+/// raw and written back byte for byte.
+#[test]
+fn map_3d_object_data_round_trips_byte_identical() {
+    let Some(p) = common::corpus_file_or_skip("esri-01") else {
+        return;
+    };
+    let bytes = std::fs::read(p).unwrap();
+    let d = Drawing::from_bytes(&bytes).unwrap();
+    let out = d.to_bytes().unwrap();
+    let (before, after) = (common::object_bytes(&bytes), common::object_bytes(&out));
+    let ird: Vec<Handle> = d
+        .objects()
+        .filter(|(_, o)| {
+            o.raw()
+                .and_then(|r| r.class_name.as_deref())
+                .is_some_and(|c| c.starts_with("IRD_"))
+        })
+        .map(|(h, _)| h)
+        .collect();
+    assert!(ird.len() >= 10, "{} IRD objects", ird.len());
+    for h in ird {
+        assert_eq!(before.get(&h), after.get(&h), "IRD object {h}");
+    }
+}
+
+/// The ODA SDK and civilcraft's own writer store pre-R2007 text items
+/// (XRECORD texts, extended data strings) with code page 0; read in the
+/// drawing's code page, their ASCII text gives no code page warning, and
+/// the XRECORD texts read as text.
+#[test]
+fn code_page_0_text_reads_without_warnings() {
+    use opendwg::object::{NonGraphical, XRecordValue};
+    for name in ["cc-02", "cc-04", "cc-15", "cc-21"] {
+        let Some(d) = open(name) else {
+            continue;
+        };
+        let warned: Vec<&str> = d
+            .diagnostics()
+            .iter()
+            .map(|x| x.message.as_str())
+            .filter(|m| m.contains("code page"))
+            .collect();
+        assert!(warned.is_empty(), "{name}: {warned:?}");
+        let texts = d
+            .objects()
+            .filter_map(|(_, o)| match o {
+                Object::Other {
+                    object: NonGraphical::XRecord(x),
+                    ..
+                } => Some(x),
+                _ => None,
+            })
+            .flat_map(|x| &x.items)
+            .filter(|(_, v)| matches!(v, XRecordValue::Text(t) if !t.is_empty()))
+            .count();
+        assert!(texts > 0, "{name}: no XRECORD text");
+    }
+}
+
 /// Civil 3D's AECC objects (classes the library does not model) are kept
 /// raw and written back byte for byte, as are all other objects of these
 /// AutoCAD-written files.
 #[test]
 fn civil_3d_objects_round_trip_byte_identical() {
-    for name in ["camber-01", "camber-18", "camber-26", "c3dtk-01", "rc-03"] {
+    for name in [
+        "camber-01",
+        "camber-18",
+        "camber-26",
+        "c3dtk-01",
+        "rc-03",
+        "esri-01",
+        "esri-02",
+    ] {
         let Some(p) = common::corpus_file_or_skip(name) else {
             continue;
         };

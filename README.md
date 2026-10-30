@@ -77,9 +77,11 @@ fn main() -> opendwg::Result<()> {
 `examples/app_workflow.rs` runs this end to end, with the recovery of an
 old drawing described below (`cargo run --example app_workflow`).
 
-Reading is fault tolerant: an object that cannot be decoded is kept as raw
-bytes with a diagnostic, and only a broken container (file header, section
-maps, object map) fails the read.
+Reading is fault tolerant about objects: one that cannot be decoded is kept
+as raw bytes with a diagnostic (or, when even its common data is
+unreadable, kept as stored and unwritable). A broken container (file
+header, section maps), header section, classes section or object map (any
+of its pages) fails the read.
 
 Writing never drops data silently. What it cannot carry over (an unknown
 section of an old file, a damaged preview, ...) is left out with a warning:
@@ -88,12 +90,14 @@ return those warnings with the file, and `Drawing::write_diagnostics` lists
 them before saving. `to_bytes` and `save` write the same file without them.
 The writer also adds what AutoCAD requires and other programs' files lack
 (the dimension style `Standard`, the `ACAD_GROUP` and `ACAD_PLOTSETTINGS`
-dictionaries), sets a null owner to the object that lists it, and gives an
-entity the block that lists it as owner, each with a warning; the drawing
-itself is not changed. `Drawing::validate` checks ownership,
-references, handles and required tables; the writer runs it before every
-save. `Drawing::remove` refuses to delete an object something still refers
-to (`Error::InUse`).
+dictionaries), sets a null owner to the one object that lists it, and gives
+an entity the block that lists it as owner, each with a warning; the drawing
+itself is not changed. An object two objects list keeps its null owner
+(which one owns it is not known): validation refuses it, but only warns
+when the object, or every object listing it, is kept raw. `Drawing::validate`
+checks ownership, references, handles and required tables; the writer runs it
+before every save. `Drawing::remove` refuses to delete an object something
+still refers to (`Error::InUse`).
 
 ## Objects that cannot be converted
 
@@ -262,6 +266,18 @@ OPENDWG_REQUIRE_CORPUS=1 cargo test --release -- --include-ignored
 The ignored tests are the slow ones, such as the 200,000-entity round trip
 (`large_drawing_roundtrip_is_linear`), meant for release builds.
 
+`scripts/check-msrv.sh` builds the library, tests and examples, with and
+without `serde`, on the crate's `rust-version` (1.85) with warnings as
+errors: newer syntax such as let chains does not build there. It needs that
+toolchain (`rustup toolchain install 1.85`).
+
+CI (`.github/workflows/ci.yml`) runs on every pull request and on pushes
+to `main` and `develop`: it fetches the corpus once, runs the release tests
+(ignored ones included, with `OPENDWG_REQUIRE_CORPUS=1`) on Linux, Windows
+and macOS, the `serde` tests on Linux, `rustfmt`, `clippy` and `rustdoc`
+with warnings as errors, a build of the fuzz targets, and
+`scripts/check-msrv.sh`.
+
 ### Fuzzing
 
 `tests/mutation_fuzz.rs` runs in every `cargo test`: it mutates each corpus
@@ -323,7 +339,8 @@ Agreement, see `THIRD_PARTY.md`) are accepted by each person for themselves:
 running it on your own machine is fine, running it in hosted or shared CI is
 not clearly permitted. So the oracle is local opt-in only: the tests print
 `SKIP` and pass when the converter is not installed, and never run it when
-the `CI` environment variable is set. CI relies on `Drawing::validate` and
+the `CI` environment variable is set to a value other than empty, `0` or
+`false` (CI services set it to `true`). CI relies on `Drawing::validate` and
 the manual AutoCAD sign-off below.
 
 To run it, install the converter yourself, then:

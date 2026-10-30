@@ -616,9 +616,8 @@ fn new_with_every_entity_kind() {
         .filter(|(_, o)| matches!(o, Object::Entity { .. }))
         .map(|(_, o)| o.type_name().into_owned())
         .collect();
-    // Every typed entity kind but the ACIS ones, the owned ones (ATTRIB,
-    // VERTEX, SEQEND, BLOCK, ENDBLK) and the proxy entity (an object of
-    // another application's class).
+    // Every typed entity kind but the ACIS ones and the owned ones (ATTRIB,
+    // VERTEX, SEQEND, BLOCK, ENDBLK).
     for k in [
         "LINE",
         "POINT",
@@ -660,6 +659,7 @@ fn new_with_every_entity_kind() {
         "WIPEOUT",
         "OLE2FRAME",
         "VIEWPORT",
+        "ACAD_PROXY_ENTITY",
     ] {
         assert!(kinds.contains(k), "{k} not added: {kinds:?}");
     }

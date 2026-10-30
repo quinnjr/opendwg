@@ -25,7 +25,10 @@
 //!   as AutoCAD 2025 writes some dimension fields): written in the
 //!   shortest form;
 //! - the end padding of a typed object's handle stream (fewer than 8 bits):
-//!   written as one bits, as AutoCAD pads. Raw objects keep theirs.
+//!   written as one bits, as AutoCAD pads. Raw objects keep theirs;
+//! - the reference codes of the object's own handle and of an extended data
+//!   application's handle (only their values are kept): written as 0 and 5
+//!   (a hard pointer), as AutoCAD writes them.
 //!
 //! The corpus tests allow such objects (at most one in fifty of a type per
 //! file) and check that they decode equal.
@@ -519,8 +522,12 @@ impl NonGraphical {
     }
 
     /// Whether the object can be written as R2018. Raw bits from R2000 and
-    /// R2004 cannot, nor raw bits of a modeled type from before R2018 (see
-    /// [`raw_is_convertible`]); neither can an object whose common data
+    /// R2004 cannot, nor raw bits of a modeled type read from a version
+    /// before the one whose layout of the type is R2018's (see
+    /// [`raw_is_convertible`] and [`layout_stable_since`]: MATERIAL from
+    /// R2007, VISUALSTYLE from R2013, other types R2018), but a VISUALSTYLE
+    /// AutoCAD marked as saved in its earlier layout, which is copied (see
+    /// [`Object::is_convertible`]); neither can an object whose common data
     /// could not be read ([`NonGraphical::Unreadable`]), an R2000 block
     /// record whose entity list has not been built (see [`EntityList`]), a
     /// table entry whose xref index R2018 cannot store (see [`TableEntry`]),
@@ -560,6 +567,24 @@ impl NonGraphical {
             NonGraphical::VpEntHdr(x) => &x.entry,
             _ => return None,
         })
+    }
+
+    /// The dictionary of a dictionary, with or without a default entry.
+    pub fn dictionary(&self) -> Option<&Dictionary> {
+        match self {
+            NonGraphical::Dictionary(d) => Some(d),
+            NonGraphical::DictionaryWithDefault(d) => Some(&d.dictionary),
+            _ => None,
+        }
+    }
+
+    /// [`NonGraphical::dictionary`], to change in place.
+    pub(crate) fn dictionary_mut(&mut self) -> Option<&mut Dictionary> {
+        match self {
+            NonGraphical::Dictionary(d) => Some(d),
+            NonGraphical::DictionaryWithDefault(d) => Some(&mut d.dictionary),
+            _ => None,
+        }
     }
 
     fn encode(&self, w: &mut ObjWriter) -> Result<()> {
@@ -814,6 +839,23 @@ impl Object {
         }
     }
 
+    /// The dictionary of a dictionary object (see
+    /// [`NonGraphical::dictionary`]).
+    pub(crate) fn dictionary(&self) -> Option<&Dictionary> {
+        match self {
+            Object::Other { object, .. } => object.dictionary(),
+            Object::Entity { .. } => None,
+        }
+    }
+
+    /// [`Object::dictionary`], to change in place.
+    pub(crate) fn dictionary_mut(&mut self) -> Option<&mut Dictionary> {
+        match self {
+            Object::Other { object, .. } => object.dictionary_mut(),
+            Object::Entity { .. } => None,
+        }
+    }
+
     /// The raw data of an object kept as bits.
     pub fn raw(&self) -> Option<&RawObject> {
         match self {
@@ -872,12 +914,158 @@ impl Object {
     }
 }
 
+/// A typed decoder of a class type's entities.
+type EntityDecoder = fn(&mut ObjReader) -> Result<Entity>;
+
+/// A typed decoder of a class type's non-graphical objects.
+type ObjectDecoder = fn(&mut ObjReader) -> Result<NonGraphical>;
+
+/// The HATCH decoder, for both its keys (see [`typed_entity`]).
+fn decode_hatch(r: &mut ObjReader) -> Result<Entity> {
+    Hatch::decode(r).map(|h| Entity::Hatch(Box::new(h)))
+}
+
+/// The OLE2FRAME decoder, for both its keys (see [`typed_entity`]).
+fn decode_ole2frame(r: &mut ObjReader) -> Result<Entity> {
+    Ole2Frame::decode(r).map(|o| Entity::Ole2Frame(Box::new(o)))
+}
+
+/// The ACAD_PROXY_ENTITY decoder, for both its keys (see [`typed_entity`]).
+fn decode_proxy_entity(r: &mut ObjReader) -> Result<Entity> {
+    ProxyEntity::decode(r).map(|p| Entity::ProxyEntity(Box::new(p)))
+}
+
+/// The LWPOLYLINE decoder, for both its keys (see [`typed_entity`]).
+fn decode_lwpolyline(r: &mut ObjReader) -> Result<Entity> {
+    LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)))
+}
+
+/// The class types [`typed_entity`] decodes, by DXF name, sorted (for the
+/// binary search): the one list both it and [`is_modeled`] read.
+const ENTITY_CLASSES: [(&str, EntityDecoder); 9] = [
+    ("ACAD_PROXY_ENTITY", decode_proxy_entity),
+    ("ARC_DIMENSION", |r| {
+        Dimension::decode(r, DimType::ArcLength).map(|d| Entity::Dimension(Box::new(d)))
+    }),
+    ("HATCH", decode_hatch),
+    ("IMAGE", |r| {
+        Image::decode(r).map(|i| Entity::Image(Box::new(i)))
+    }),
+    ("LARGE_RADIAL_DIMENSION", |r| {
+        Dimension::decode(r, DimType::LargeRadial).map(|d| Entity::Dimension(Box::new(d)))
+    }),
+    ("LWPOLYLINE", decode_lwpolyline),
+    ("MULTILEADER", |r| {
+        MultiLeader::decode(r).map(|m| Entity::MultiLeader(Box::new(m)))
+    }),
+    ("OLE2FRAME", decode_ole2frame),
+    ("WIPEOUT", |r| {
+        Image::decode(r).map(|i| Entity::Wipeout(Box::new(i)))
+    }),
+];
+
+/// The class types [`typed_object`] decodes, by DXF name, sorted (for the
+/// binary search): the one list both it and [`is_modeled`] read. Some are
+/// decoded only from a version on, or not when saved in an older layout
+/// (see [`typed_object`]); [`is_modeled`] answers for R2018 files.
+const OBJECT_CLASSES: [(&str, ObjectDecoder); 26] = {
+    use NonGraphical as N;
+    [
+        ("ACAD_PROXY_OBJECT", |r| {
+            ProxyObject::decode(r).map(|p| N::ProxyObject(Box::new(p)))
+        }),
+        ("ACDBDETAILVIEWSTYLE", |r| {
+            DetailViewStyle::decode(r).map(|v| N::DetailViewStyle(Box::new(v)))
+        }),
+        ("ACDBDICTIONARYWDFLT", |r| {
+            DictionaryWithDefault::decode(r).map(N::DictionaryWithDefault)
+        }),
+        ("ACDBPLACEHOLDER", |_| Ok(N::Placeholder)),
+        ("ACDBSECTIONVIEWSTYLE", |r| {
+            SectionViewStyle::decode(r).map(|v| N::SectionViewStyle(Box::new(v)))
+        }),
+        ("DICTIONARY", |r| Dictionary::decode(r).map(N::Dictionary)),
+        ("DICTIONARYVAR", |r| {
+            DictionaryVar::decode(r).map(N::DictionaryVar)
+        }),
+        ("DICTIONARYWDFLT", |r| {
+            DictionaryWithDefault::decode(r).map(N::DictionaryWithDefault)
+        }),
+        ("GROUP", |r| Group::decode(r).map(N::Group)),
+        ("IMAGEDEF", |r| ImageDef::decode(r).map(N::ImageDef)),
+        ("IMAGEDEF_REACTOR", |r| {
+            ImageDefReactor::decode(r).map(N::ImageDefReactor)
+        }),
+        ("LAYER_INDEX", |r| LayerIndex::decode(r).map(N::LayerIndex)),
+        ("LAYOUT", |r| {
+            Layout::decode(r).map(|l| N::Layout(Box::new(l)))
+        }),
+        ("MATERIAL", |r| {
+            Material::decode(r).map(|m| N::Material(Box::new(m)))
+        }),
+        ("MLEADERSTYLE", |r| {
+            MLeaderStyle::decode(r).map(|m| N::MLeaderStyle(Box::new(m)))
+        }),
+        ("MLINESTYLE", |r| MLineStyle::decode(r).map(N::MLineStyle)),
+        ("PLOTSETTINGS", |r| {
+            PlotSettings::decode(r).map(|p| N::PlotSettings(Box::new(p)))
+        }),
+        ("RASTERVARIABLES", |r| {
+            RasterVariables::decode(r).map(N::RasterVariables)
+        }),
+        ("SCALE", |r| Scale::decode(r).map(N::Scale)),
+        ("SORTENTSTABLE", |r| {
+            SortEntsTable::decode(r).map(N::SortEntsTable)
+        }),
+        ("SPATIAL_FILTER", |r| {
+            SpatialFilter::decode(r).map(N::SpatialFilter)
+        }),
+        ("SPATIAL_INDEX", |r| {
+            SpatialIndex::decode(r).map(|s| N::SpatialIndex(Box::new(s)))
+        }),
+        ("TABLESTYLE", |r| TableStyle::decode(r).map(N::TableStyle)),
+        ("VISUALSTYLE", |r| {
+            VisualStyle::decode(r).map(|v| N::VisualStyle(Box::new(v)))
+        }),
+        ("WIPEOUTVARIABLES", |r| {
+            WipeoutVariables::decode(r).map(N::WipeoutVariables)
+        }),
+        ("XRECORD", |r| XRecord::decode(r).map(N::XRecord)),
+    ]
+};
+
+/// The decoder of class type `name` in `table` (sorted by name).
+fn class_decoder<T: Copy>(table: &[(&str, T)], name: &str) -> Option<T> {
+    let i = table.binary_search_by(|(n, _)| (*n).cmp(name)).ok()?;
+    Some(table[i].1)
+}
+
 /// Whether the library decodes objects of type `key` (entities when
-/// `entity`) into typed values: whether a typed decoder exists for it.
+/// `entity`) into typed values in an R2018 file: whether a typed decoder
+/// exists for it. Class types are looked up in [`ENTITY_CLASSES`] and
+/// [`OBJECT_CLASSES`], the dispatchers' own tables; fixed types in a table
+/// made once by asking the dispatchers.
 fn is_modeled(key: TypeKey, entity: bool) -> bool {
+    use std::sync::OnceLock;
+    static FIXED: OnceLock<Vec<[bool; 2]>> = OnceLock::new();
+    match key {
+        TypeKey::Class(name) if entity => class_decoder(&ENTITY_CLASSES, name).is_some(),
+        TypeKey::Class(name) => class_decoder(&OBJECT_CLASSES, name).is_some(),
+        TypeKey::Fixed(code) => FIXED
+            .get_or_init(|| {
+                (0..FIRST_CLASS_NUMBER)
+                    .map(|c| [false, true].map(|entity| probe_modeled(TypeKey::Fixed(c), entity)))
+                    .collect()
+            })
+            .get(usize::from(code))
+            .is_some_and(|kinds| kinds[usize::from(entity)]),
+    }
+}
+
+/// [`is_modeled`] asked of the dispatchers: they only report whether they
+/// handle `key`; on no input they fail at once, and the result is dropped.
+fn probe_modeled(key: TypeKey, entity: bool) -> bool {
     use crate::bits::BitReader;
-    // The decoders only report whether they handle `key`; on no input they
-    // fail at once, and the result is dropped.
     let mut r = ObjReader::from_streams(
         BitReader::new(&[]),
         None,
@@ -1067,37 +1255,18 @@ enum TypeKey<'a> {
     Class(&'a str),
 }
 
-/// The typed entity decoders; `None` keeps the entity raw. Fixed types
-/// older files may store as class types (HATCH, OLE2FRAME,
-/// ACAD_PROXY_ENTITY, LWPOLYLINE) are decoded by either key.
+/// The typed entity decoders; `None` keeps the entity raw. Class types are
+/// decoded by [`ENTITY_CLASSES`]; fixed types older files may store as
+/// class types (HATCH, OLE2FRAME, ACAD_PROXY_ENTITY, LWPOLYLINE) are
+/// decoded by either key.
 fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
     use type_code::*;
     let dim =
         |r: &mut ObjReader, t| Dimension::decode(r, t).map(|d| Entity::Dimension(Box::new(d)));
     let acis = |r: &mut ObjReader, k| AcisEntity::decode(r, k).map(|a| Entity::Acis(Box::new(a)));
-    let hatch = |r: &mut ObjReader| Hatch::decode(r).map(|h| Entity::Hatch(Box::new(h)));
-    let ole2frame =
-        |r: &mut ObjReader| Ole2Frame::decode(r).map(|o| Entity::Ole2Frame(Box::new(o)));
-    let proxy =
-        |r: &mut ObjReader| ProxyEntity::decode(r).map(|p| Entity::ProxyEntity(Box::new(p)));
-    let lwpolyline =
-        |r: &mut ObjReader| LwPolyline::decode(r).map(|p| Entity::LwPolyline(Box::new(p)));
     let code = match key {
         TypeKey::Fixed(code) => code,
-        TypeKey::Class(name) => {
-            return Some(match name {
-                "ARC_DIMENSION" => dim(r, DimType::ArcLength),
-                "LARGE_RADIAL_DIMENSION" => dim(r, DimType::LargeRadial),
-                "MULTILEADER" => MultiLeader::decode(r).map(|m| Entity::MultiLeader(Box::new(m))),
-                "IMAGE" => Image::decode(r).map(|i| Entity::Image(Box::new(i))),
-                "WIPEOUT" => Image::decode(r).map(|i| Entity::Wipeout(Box::new(i))),
-                "HATCH" => hatch(r),
-                "OLE2FRAME" => ole2frame(r),
-                "ACAD_PROXY_ENTITY" => proxy(r),
-                "LWPOLYLINE" => lwpolyline(r),
-                _ => return None,
-            });
-        }
+        TypeKey::Class(name) => return Some(class_decoder(&ENTITY_CLASSES, name)?(r)),
     };
     Some(match code {
         LINE => Line::decode(r).map(Entity::Line),
@@ -1120,7 +1289,7 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
         ATTRIB => Attrib::decode(r).map(|a| Entity::Attrib(Box::new(a))),
         ATTDEF => AttDef::decode(r).map(|a| Entity::AttDef(Box::new(a))),
         MTEXT => MText::decode(r).map(|m| Entity::MText(Box::new(m))),
-        LWPOLYLINE => lwpolyline(r),
+        LWPOLYLINE => decode_lwpolyline(r),
         POLYLINE_2D => Polyline2d::decode(r).map(Entity::Polyline2d),
         POLYLINE_3D => Polyline3d::decode(r).map(Entity::Polyline3d),
         POLYLINE_PFACE => PolyfaceMesh::decode(r).map(Entity::PolyfaceMesh),
@@ -1141,64 +1310,36 @@ fn typed_entity(key: TypeKey, r: &mut ObjReader) -> Option<Result<Entity>> {
         DIM_DIAMETER => dim(r, DimType::Diameter),
         LEADER => Leader::decode(r).map(|l| Entity::Leader(Box::new(l))),
         TOLERANCE => Tolerance::decode(r).map(Entity::Tolerance),
-        HATCH => hatch(r),
+        HATCH => decode_hatch(r),
         VIEWPORT => Viewport::decode(r).map(|v| Entity::Viewport(Box::new(v))),
         REGION => acis(r, AcisKind::Region),
         SOLID3D => acis(r, AcisKind::Solid3d),
         BODY => acis(r, AcisKind::Body),
-        OLE2FRAME => ole2frame(r),
-        ACAD_PROXY_ENTITY => proxy(r),
+        OLE2FRAME => decode_ole2frame(r),
+        ACAD_PROXY_ENTITY => decode_proxy_entity(r),
         _ => return None,
     })
 }
 
-/// The typed non-graphical decoders; `None` keeps the object raw. The fixed
-/// types also decoded by class name, as older files may store them (LAYOUT
-/// and ACDBPLACEHOLDER are class types in R2000), are DICTIONARY, XRECORD,
-/// LAYOUT, GROUP, MLINESTYLE, ACDBPLACEHOLDER and ACAD_PROXY_OBJECT; the
-/// other names below are class types only.
+/// The typed non-graphical decoders; `None` keeps the object raw. Class
+/// types are decoded by [`OBJECT_CLASSES`]; the fixed types also decoded by
+/// class name there, as older files may store them (LAYOUT and
+/// ACDBPLACEHOLDER are class types in R2000), are DICTIONARY, XRECORD,
+/// LAYOUT, GROUP, MLINESTYLE, ACDBPLACEHOLDER and ACAD_PROXY_OBJECT.
 fn typed_object(key: TypeKey, r: &mut ObjReader) -> Option<Result<NonGraphical>> {
     use type_code::*;
     let code = match key {
         TypeKey::Fixed(code) => code,
         TypeKey::Class(name) => {
-            use NonGraphical as N;
-            return Some(match name {
-                "DICTIONARY" => Dictionary::decode(r).map(N::Dictionary),
-                "ACDBDICTIONARYWDFLT" | "DICTIONARYWDFLT" => {
-                    DictionaryWithDefault::decode(r).map(N::DictionaryWithDefault)
-                }
-                "XRECORD" => XRecord::decode(r).map(N::XRecord),
-                "LAYOUT" => Layout::decode(r).map(|l| N::Layout(Box::new(l))),
-                "PLOTSETTINGS" => PlotSettings::decode(r).map(|p| N::PlotSettings(Box::new(p))),
-                "GROUP" => Group::decode(r).map(N::Group),
-                "MLINESTYLE" => MLineStyle::decode(r).map(N::MLineStyle),
-                "MLEADERSTYLE" => MLeaderStyle::decode(r).map(|m| N::MLeaderStyle(Box::new(m))),
-                "TABLESTYLE" => TableStyle::decode(r).map(N::TableStyle),
-                "IMAGEDEF" => ImageDef::decode(r).map(N::ImageDef),
-                "IMAGEDEF_REACTOR" => ImageDefReactor::decode(r).map(N::ImageDefReactor),
-                "RASTERVARIABLES" => RasterVariables::decode(r).map(N::RasterVariables),
-                "WIPEOUTVARIABLES" => WipeoutVariables::decode(r).map(N::WipeoutVariables),
-                "SCALE" => Scale::decode(r).map(N::Scale),
-                "DICTIONARYVAR" => DictionaryVar::decode(r).map(N::DictionaryVar),
-                "ACDBPLACEHOLDER" => Ok(N::Placeholder),
-                "SORTENTSTABLE" => SortEntsTable::decode(r).map(N::SortEntsTable),
-                "ACAD_PROXY_OBJECT" => ProxyObject::decode(r).map(|p| N::ProxyObject(Box::new(p))),
-                "SPATIAL_INDEX" => SpatialIndex::decode(r).map(|s| N::SpatialIndex(Box::new(s))),
-                "LAYER_INDEX" => LayerIndex::decode(r).map(N::LayerIndex),
-                "SPATIAL_FILTER" => SpatialFilter::decode(r).map(N::SpatialFilter),
-                n if modeled_since(n).is_some_and(|v| r.version < v) => return None,
-                "VISUALSTYLE" if r.saved_by_object_version => return None,
-                "MATERIAL" => Material::decode(r).map(|m| N::Material(Box::new(m))),
-                "VISUALSTYLE" => VisualStyle::decode(r).map(|v| N::VisualStyle(Box::new(v))),
-                "ACDBSECTIONVIEWSTYLE" => {
-                    SectionViewStyle::decode(r).map(|v| N::SectionViewStyle(Box::new(v)))
-                }
-                "ACDBDETAILVIEWSTYLE" => {
-                    DetailViewStyle::decode(r).map(|v| N::DetailViewStyle(Box::new(v)))
-                }
-                _ => return None,
-            });
+            let decode = class_decoder(&OBJECT_CLASSES, name)?;
+            // Types modeled from a version on are kept raw before it; a
+            // VISUALSTYLE saved in an older layout is kept raw too.
+            if modeled_since(name).is_some_and(|v| r.version < v)
+                || (name == "VISUALSTYLE" && r.saved_by_object_version)
+            {
+                return None;
+            }
+            return Some(decode(r));
         }
     };
     if let Some(kind) = TableKind::from_control_code(code) {
@@ -1239,12 +1380,13 @@ fn unread_bits(r: &ObjReader) -> Option<String> {
 
 /// Run a typed decoder on a copy of `r`. On success the copy replaces `r`;
 /// on failure, or when the decoder leaves bits unread (they would be lost on
-/// write), `r` is left after the common data and a warning is recorded, so
-/// the caller keeps the object raw.
+/// write), `r` is left after the common data and a warning about `handle`
+/// (the object map's) is recorded, so the caller keeps the object raw.
 fn try_typed<T>(
     r: &mut ObjReader,
+    handle: Handle,
     key: TypeKey,
-    type_name: &str,
+    type_name: impl FnOnce() -> String,
     decode: fn(TypeKey, &mut ObjReader) -> Option<Result<T>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<T> {
@@ -1261,8 +1403,8 @@ fn try_typed<T>(
     };
     diagnostics.push(Diagnostic {
         severity: Severity::Warning,
-        handle: Some(r.handle),
-        message: format!("{type_name} decode failed: {failure}; kept raw"),
+        handle: Some(handle),
+        message: format!("{} decode failed: {failure}; kept raw", type_name()),
     });
     None
 }
@@ -1323,13 +1465,18 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
         };
         (TypeKey::Fixed(code), None, is_entity)
     };
-    let name = class_name
-        .clone()
-        .or_else(|| fixed_type(code).map(|(n, _)| n.to_owned()))
-        .unwrap_or_else(|| format!("TYPE_{code}"));
+    // The type's name, for a failed typed decode's warning only: made then.
+    let name = || key_name(key).into_owned();
     let obj = if is_entity {
         let common = decode_entity_common(&mut r)?;
-        let entity = match try_typed(&mut r, key, &name, typed_entity, &mut ctx.diagnostics) {
+        let entity = match try_typed(
+            &mut r,
+            handle,
+            key,
+            name,
+            typed_entity,
+            &mut ctx.diagnostics,
+        ) {
             Some(e) => e,
             None => Entity::Unknown(RawObject::decode(&mut r, code, class_name)?),
         };
@@ -1340,7 +1487,14 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
             .mleader_style_marker
             .is_some_and(|m| common.xdata.iter().any(|x| x.app == m));
         r.saved_by_object_version = saved_by_object_version(&common);
-        let object = match try_typed(&mut r, key, &name, typed_object, &mut ctx.diagnostics) {
+        let object = match try_typed(
+            &mut r,
+            handle,
+            key,
+            name,
+            typed_object,
+            &mut ctx.diagnostics,
+        ) {
             Some(o) => o,
             None => NonGraphical::Unknown(RawObject::decode(&mut r, code, class_name)?),
         };
@@ -1349,6 +1503,11 @@ pub fn decode_object(bytes: &[u8], handle: Handle, ctx: &mut DecodeCtx) -> Resul
     if obj.handle() != handle {
         let message = format!("object stores handle {}", obj.handle());
         warn(&mut ctx.diagnostics, message);
+    }
+    // The reader's own warnings (lossy text) name the handle it read from
+    // the object; report them under the map's, as every other one is.
+    for d in &mut r.diagnostics {
+        d.handle = Some(handle);
     }
     ctx.diagnostics.append(&mut r.diagnostics);
     Ok(obj)
@@ -1584,6 +1743,47 @@ mod tests {
             w.handle_stream().write_b(true);
         }
         w.finish(type_code).unwrap()
+    }
+
+    /// The class tables are sorted without duplicates, for the binary
+    /// search; `is_modeled` agrees with the dispatchers for every fixed code
+    /// and every class name the library knows of (the tables', the fixed
+    /// types', the known classes', and some it does not model), for both
+    /// kinds.
+    #[test]
+    fn modeled_tables_match_the_dispatchers() {
+        assert!(ENTITY_CLASSES.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(OBJECT_CLASSES.windows(2).all(|w| w[0].0 < w[1].0));
+        for code in 0..=u16::MAX {
+            for entity in [false, true] {
+                let key = TypeKey::Fixed(code);
+                assert_eq!(
+                    is_modeled(key, entity),
+                    probe_modeled(key, entity),
+                    "{code} {entity}"
+                );
+            }
+        }
+        let mut names: Vec<String> = ENTITY_CLASSES
+            .iter()
+            .map(|(n, _)| n.to_string())
+            .chain(OBJECT_CLASSES.iter().map(|(n, _)| n.to_string()))
+            .collect();
+        names.extend((0..FIRST_CLASS_NUMBER).filter_map(|c| Some(fixed_type(c)?.0.to_owned())));
+        names.extend(crate::section::classes::known_class_names().map(String::from));
+        names.extend(
+            ["ACAD_TABLE", "CELLSTYLEMAP", "AECC_STYLE", "", "dictionary"].map(String::from),
+        );
+        for name in &names {
+            for entity in [false, true] {
+                let key = TypeKey::Class(name);
+                assert_eq!(
+                    is_modeled(key, entity),
+                    probe_modeled(key, entity),
+                    "{name} {entity}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1890,7 +2090,17 @@ mod tests {
         let pos = r.data.bit_pos();
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
-        assert_eq!(try_typed(&mut r, key, "XRECORD", failing, &mut diags), None);
+        assert_eq!(
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                failing,
+                &mut diags
+            ),
+            None
+        );
         assert_eq!(
             diags,
             [Diagnostic {
@@ -1915,14 +2125,28 @@ mod tests {
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
         assert_eq!(
-            try_typed(&mut r, key, "XRECORD", succeeding, &mut diags),
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                succeeding,
+                &mut diags
+            ),
             Some(300)
         );
         assert!(diags.is_empty());
         assert_eq!(r.data.bit_pos(), pos + 19);
         assert_eq!(r.data.remaining_bits(), 0);
         assert_eq!(
-            try_typed(&mut r, key, "XRECORD", typed_none, &mut diags),
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                typed_none,
+                &mut diags
+            ),
             None
         );
         assert_eq!(r.data.bit_pos(), pos + 19);
@@ -1936,7 +2160,17 @@ mod tests {
         let pos = r.data.bit_pos();
         let mut diags = vec![];
         let key = TypeKey::Fixed(type_code::XRECORD);
-        assert_eq!(try_typed(&mut r, key, "XRECORD", partial, &mut diags), None);
+        assert_eq!(
+            try_typed(
+                &mut r,
+                Handle(0x80),
+                key,
+                || "XRECORD".into(),
+                partial,
+                &mut diags
+            ),
+            None
+        );
         assert_eq!(r.data.bit_pos(), pos);
         assert_eq!(diags.len(), 1);
         // Left: the B; the string (a 10-bit BS length and 6 UTF-16 units);
@@ -1964,12 +2198,66 @@ mod tests {
         assert!(msgs[1].contains("stores handle 80"));
         assert!(c.diagnostics.iter().all(|d| d.handle == Some(Handle(0x81))));
 
+        // A failed typed decode's warning, too, names the map's handle, not
+        // the one the object stores.
+        let xrecord = custom_object(type_code::XRECORD, 0x80);
+        let mut c = ctx(&[]);
+        let obj = decode_object(&xrecord, Handle(0x81), &mut c).unwrap();
+        assert_eq!(obj.type_name(), "XRECORD");
+        assert!(
+            c.diagnostics.iter().any(|d| d.message.contains("kept raw")),
+            "{:?}",
+            c.diagnostics
+        );
+        assert!(c.diagnostics.iter().all(|d| d.handle == Some(Handle(0x81))));
+
         let n = bytes.len();
         bytes[n - 1] ^= 0xFF;
         let mut c = ctx(&[]);
         decode_object(&bytes, Handle(0x80), &mut c).unwrap();
         assert_eq!(c.diagnostics.len(), 2, "{:?}", c.diagnostics);
         assert!(c.diagnostics[0].message.contains("CRC"));
+    }
+
+    /// The reader's own warnings (here a string in an unsupported code page
+    /// in the extended data) name the object map's handle too, when the
+    /// object stores another.
+    #[test]
+    fn reader_warnings_name_the_map_handle() {
+        let mut d = BitWriter::new();
+        d.write_handle_ref(HandleRef {
+            code: 0,
+            value: 0x50,
+        })
+        .unwrap();
+        let data = [0, 1, 0, 11, b'A'];
+        d.write_bs(data.len() as i16);
+        d.write_handle_ref(HandleRef {
+            code: 5,
+            value: 0x12,
+        })
+        .unwrap();
+        d.write_bytes(&data);
+        d.write_bs(0);
+        d.write_bl(0); // reactors
+        d.write_b(true); // no xdict
+        let mut hs = BitWriter::new();
+        hs.write_handle_ref(HandleRef { code: 4, value: 1 })
+            .unwrap();
+        let bytes = assemble(Version::R2004, type_code::DICTIONARY, &d, None, &hs);
+        let mut c = DecodeCtx {
+            version: Version::R2004,
+            ..ctx(&[])
+        };
+        decode_object(&bytes, Handle(0x51), &mut c).unwrap();
+        assert!(
+            c.diagnostics
+                .iter()
+                .any(|d| d.message.contains("code page 11")),
+            "{:?}",
+            c.diagnostics
+        );
+        assert!(c.diagnostics.iter().all(|d| d.handle == Some(Handle(0x51))));
     }
 
     #[test]

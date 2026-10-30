@@ -27,7 +27,12 @@ done
 
 fail=0
 tmp=""
-trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT INT TERM
+cleanup() { [ -z "$tmp" ] || rm -f "$tmp"; }
+# A signal stops the whole run (not just the current download), with the
+# shell's usual status for it.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 tab=$(printf '\t')
 while IFS="$tab" read -r name url sha; do
   out="$dest/$name.dwg"

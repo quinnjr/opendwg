@@ -19,6 +19,21 @@ fn r2018_sample() -> Option<Drawing> {
     Some(Drawing::open(path).unwrap())
 }
 
+/// Deserialized data storage records are put in data index order, as
+/// parsed ones, so `acis_data` finds them by binary search.
+#[test]
+fn deserialized_data_records_are_sorted() {
+    use opendwg::Handle;
+    use opendwg::section::DataStorage;
+    let mut s = DataStorage::with_default_schemas();
+    s.set_acis_data_all((1..=20u64).map(|i| (Handle(i), vec![i as u8])));
+    let sorted = s.records.clone();
+    s.records.reverse();
+    let back: DataStorage = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+    assert_eq!(back.records, sorted);
+    assert_eq!(back.acis_data(Handle(7)), Some(&[7][..]));
+}
+
 #[test]
 fn r2018_drawing_serializes_to_json() {
     let Some(d) = r2018_sample() else {
@@ -298,4 +313,22 @@ fn error_serializes_for_a_front_end() {
     );
     let io = json(&Error::Io(std::io::Error::other("disk")));
     assert_eq!(io["kind"], "Io");
+    // Errors about no object have no `handles`, even of a kind that can
+    // name objects.
+    let invalid = Error::Invalid(vec![opendwg::Diagnostic {
+        severity: opendwg::Severity::Error,
+        handle: None,
+        message: "no object".into(),
+    }]);
+    assert_eq!(invalid.handles(), None);
+    assert_eq!(
+        json(&invalid),
+        serde_json::json!({ "kind": "Invalid", "message": json(&invalid)["message"] })
+    );
+    let header_only = Error::InUse {
+        objects: vec![],
+        header_vars: vec!["$CLAYER"],
+    };
+    assert_eq!(header_only.handles(), None);
+    assert!(json(&header_only).get("handles").is_none());
 }

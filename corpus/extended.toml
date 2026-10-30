@@ -1225,3 +1225,159 @@ license_note = "MIT (ACadSharp, Copyright (c) 2021 Albert Domenech); the LICENSE
 
 [file.expect]
 open = "unsupported"
+
+[[file]]
+name = "tw-01"
+url = "https://raw.githubusercontent.com/roscoe-tw/fu-acaddoc/a629554e397bf4c61a7f69c5c5f2c79336841ad5/s1.dwg"
+sha256 = "34715ac69461a0759434f4758ec23673420c3f8fdd81cec55a05ca0a8c3ecf8f"
+version = "AC1015"
+features = ["custom_objects","non_ascii"]
+producer = "unknown (Traditional Chinese AutoCAD), ANSI_950"
+license_note = "MIT (roscoe-tw/fu-acaddoc, Copyright (c) 2018 roscoe-tw); the LICENSE at the repository root, commit a629554e397b; the block drawing of the author's own AutoLISP sample"
+
+[file.expect]
+unconvertible = true
+
+[[file]]
+name = "tw-02"
+url = "https://raw.githubusercontent.com/roscoe-tw/fu-acaddoc/a629554e397bf4c61a7f69c5c5f2c79336841ad5/fu.dwg"
+sha256 = "f17fc609ac64a4405af7cb34e42d119953ed91c1ba03483b78abb5351d49fc62"
+version = "AC1027"
+features = ["custom_objects","hatch","image","non_ascii","proxy_graphics"]
+producer = "AutoCAD 2017 (registry 21.0, locale 1028), ANSI_950"
+license_note = "MIT (roscoe-tw/fu-acaddoc, Copyright (c) 2018 roscoe-tw); the LICENSE at the repository root, commit a629554e397b; the demo drawing of the author's own AutoLISP sample"
+
+[[file]]
+name = "peta-01"
+url = "https://raw.githubusercontent.com/nisefuruta/CADPeta/6df085f156c974b9a66cd613404821c93e0b1131/tests/assets/testcharts/TESTCHART.dwg"
+sha256 = "19713c65723c4f4933864956c3d7cd473eb4c2a732c8a0f291ddf31f5c903c2d"
+version = "AC1027"
+features = ["custom_objects","dimension","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "AutoCAD 2026 (registry 25.1, locale 1041), ANSI_932"
+license_note = "MIT (nisefuruta/CADPeta, Copyright (c) 2026 WATANABE Kazufumi); the LICENSE at the repository root, commit 6df085f156c9, covers tests/; the author's own test chart"
+
+[[file]]
+name = "peta-02"
+url = "https://raw.githubusercontent.com/nisefuruta/CADPeta/6df085f156c974b9a66cd613404821c93e0b1131/tests/assets/testcharts/TESTCHART2.dwg"
+sha256 = "4ceb1d91378bcd5fbfe23b7b2e40981af78c7e6a4be2101cec22a0f0998fc470"
+version = "AC1027"
+features = ["custom_objects","dimension","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "AutoCAD 2026 (registry 25.1, locale 1041), ANSI_932"
+license_note = "MIT (nisefuruta/CADPeta, Copyright (c) 2026 WATANABE Kazufumi); the LICENSE at the repository root, commit 6df085f156c9, covers tests/; the author's own test chart"
+
+[[file]]
+name = "peta-03"
+url = "https://raw.githubusercontent.com/nisefuruta/CADPeta/6df085f156c974b9a66cd613404821c93e0b1131/tests/tools/cad-typography/glyph_render_check/glyph_chart.dwg"
+sha256 = "014bc3e7d7d47abb88963a598c136096ff6d53aa4e1a00dc6a7723989f047da6"
+version = "AC1032"
+features = ["non_ascii"]
+producer = "AutoCAD 2026 (registry 25.1, locale 1041), ANSI_932"
+license_note = "MIT (nisefuruta/CADPeta, Copyright (c) 2026 WATANABE Kazufumi); the LICENSE at the repository root, commit 6df085f156c9, covers tests/; the author's own test chart"
+
+[[file]]
+name = "peta-04"
+url = "https://raw.githubusercontent.com/nisefuruta/CADPeta/6df085f156c974b9a66cd613404821c93e0b1131/tests/tools/cad-typography/justify_check/justify_chart.dwg"
+sha256 = "32db4024d1b3f21f9fa386dd4ea1ebdc074ae17d8f3744e34c9fecdfd3db769b"
+version = "AC1032"
+features = ["non_ascii"]
+producer = "AutoCAD 2026 (registry 25.1, locale 1041), ANSI_932"
+license_note = "MIT (nisefuruta/CADPeta, Copyright (c) 2026 WATANABE Kazufumi); the LICENSE at the repository root, commit 6df085f156c9, covers tests/; the author's own test chart"
+
+[[file]]
+name = "esri-01"
+url = "https://raw.githubusercontent.com/Esri/ArcGIS-for-AutoCAD-API-Samples/8a274acd8ad567f3d66404e5299d07636fea4ae1/Samples/CopyObjectDataToFields/AutoLisp/CopyObjectData_Sample.dwg"
+sha256 = "f26e8baaf4eeb3d588ec093c3976dfca48876216a0a7326bb6e019536490626c"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2026 (registry 25.1) with Map 3D object data and ArcGIS for AutoCAD"
+license_note = "Apache-2.0 (Esri/ArcGIS-for-AutoCAD-API-Samples, Copyright 2024 Esri); license.txt at the repository root, commit 8a274acd8ad5, covers Samples/"
+
+[[file]]
+name = "esri-02"
+url = "https://raw.githubusercontent.com/Esri/ArcGIS-for-AutoCAD-API-Samples/8a274acd8ad567f3d66404e5299d07636fea4ae1/Samples/UpdateCOGOPointsFromField/AutoLisp/UpdateCOGOPoints_Sample.dwg"
+sha256 = "afc4bc8fa9503a181cf10fca7877685b9f3eb0ae98c9d9dbdd228a8a8ea2528b"
+version = "AC1032"
+features = ["custom_objects","hatch","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2026 (registry 25.1) with ArcGIS for AutoCAD"
+license_note = "Apache-2.0 (Esri/ArcGIS-for-AutoCAD-API-Samples, Copyright 2024 Esri); license.txt at the repository root, commit 8a274acd8ad5, covers Samples/"
+
+[[file]]
+name = "esri-03"
+url = "https://raw.githubusercontent.com/Esri/ArcGIS-for-AutoCAD-API-Samples/8a274acd8ad567f3d66404e5299d07636fea4ae1/Samples/ExportAttributesToCSV/AutoLisp/ExportToCSV_Sample.dwg"
+sha256 = "c654f9aeddf41768458780e19c5a18a42ed8835c64596ffb84468d8256b9d3e7"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "AutoCAD 2025 (registry 25.0) with ArcGIS for AutoCAD"
+license_note = "Apache-2.0 (Esri/ArcGIS-for-AutoCAD-API-Samples, Copyright 2024 Esri); license.txt at the repository root, commit 8a274acd8ad5, covers Samples/"
+
+[[file]]
+name = "ohag-01"
+url = "https://raw.githubusercontent.com/ohagmann/cadcraft-sample-dwgs/8447af75a57538213a7d009d63ecca313491dc66/01-table-of-contents.dwg"
+sha256 = "66f339ea7187cb56209ff524393b7bccfc93a18af0a5e5168ec1b5236e923759"
+version = "AC1032"
+features = ["attributes","custom_objects","hatch","mtext","non_ascii"]
+producer = "BricsCAD V26 (Teigha 26.9)"
+license_note = "CC0-1.0 (ohagmann/cadcraft-sample-dwgs); LICENSE at the repository root, commit 8447af75a575; the README names @ohagmann as author and rights holder (sheets from their own templates, project content replaced)"
+
+[[file]]
+name = "ohag-02"
+url = "https://raw.githubusercontent.com/ohagmann/cadcraft-sample-dwgs/8447af75a57538213a7d009d63ecca313491dc66/02-ahu-schema-a.dwg"
+sha256 = "22cfb377dc35360313bfd17a7e935b454f414cb321fd852cb98279779d99ab88"
+version = "AC1032"
+features = ["attributes","custom_objects","hatch","mtext","non_ascii"]
+producer = "BricsCAD V26 (Teigha 26.9)"
+license_note = "CC0-1.0 (ohagmann/cadcraft-sample-dwgs); LICENSE at the repository root, commit 8447af75a575; the README names @ohagmann as author and rights holder (sheets from their own templates, project content replaced)"
+
+[[file]]
+name = "bim-01"
+url = "https://raw.githubusercontent.com/getcadcraft/bimcraft/c778c7ca3f83eeecc3e815078417f152b2ca7a94/fixtures/dwg/dyn-attrs-visibility.dwg"
+sha256 = "bfd7ad82e671dba84c3b3ad7b8f1213588ea6eac9e7771a2ced4f89fef64646f"
+version = "AC1021"
+features = ["attributes","custom_objects","non_ascii"]
+producer = "getcadcraft's own JS writer (cc-dwg)"
+license_note = "Apache-2.0 (getcadcraft/bimcraft); the LICENSE at the repository root, commit c778c7ca3f83"
+
+[[file]]
+name = "bim-02"
+url = "https://raw.githubusercontent.com/getcadcraft/bimcraft/c778c7ca3f83eeecc3e815078417f152b2ca7a94/fixtures/showcase/cadcraft-pdf-underlay.dwg"
+sha256 = "c8d782da52a34a53794884f16d29d08ec2b2b522b175ff0a38d14cc219717d6c"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "getcadcraft's own JS writer (cc-dwg)"
+license_note = "Apache-2.0 (getcadcraft/bimcraft); the LICENSE at the repository root, commit c778c7ca3f83"
+
+[[file]]
+name = "jp-01"
+url = "https://raw.githubusercontent.com/Fate-GX/geologic-section-alpha/1f277102be5780f07a3d5d272a8bc6b3265e8d73/dwg/synthetic_plain.dwg"
+sha256 = "3c48d1dab262fa7ba62de73b9415d23cd8b3c58aa52c7c5efd521701c85a22f5"
+version = "AC1032"
+features = ["hatch","non_ascii"]
+producer = "AutoCAD 2027 (registry 26.0, locale 1041), ANSI_932"
+license_note = "MIT (Fate-GX/geologic-section-alpha, Copyright (c) 2026 Hirotou Yuusuek); the LICENSE at the repository root, commit 1f277102be57; a synthetic section the tool generated (examples/synthetic_plain/README.md)"
+
+[[file]]
+name = "c3dru-01"
+url = "https://raw.githubusercontent.com/GeorgGrebenyuk/civil3d_2_ifc/c5929f199df2a606f23f09989c7d875d006c47cd/demo/test_pipes2.dwg"
+sha256 = "df7cd74ed0fe0b470de6af2bcc4001d097074b1f4d99f92827e930f3b33086a1"
+version = "AC1032"
+features = ["custom_objects","hatch","mtext","non_ascii","proxy_graphics"]
+producer = "Civil 3D 2022 (registry 24.1), ANSI_1251"
+license_note = "MIT (GeorgGrebenyuk/civil3d_2_ifc, Copyright (c) 2022 Georg Grebenyuk); the LICENSE at the repository root, commit c5929f199df2, covers demo/; the author's own test drawing"
+
+[[file]]
+name = "cw-01"
+url = "https://media.githubusercontent.com/media/cwoffenden/CAD-projects/7ee581a4f8062c252468159595c8e6f8bf748309/radiator-bracket/cad/radiator-bracket.dwg"
+sha256 = "f58e8738b8036e4ca68bbe7572c12272a3f9a8542bd7cfdf0432a403bca1ebd8"
+version = "AC1032"
+features = ["custom_objects","dimension","mtext","non_ascii","proxy_graphics","xref"]
+producer = "BricsCAD V24 (Teigha 24.9), Mechanical objects"
+license_note = "CC0-1.0 (cwoffenden/CAD-projects); the LICENSE and README at the repository root, commit 7ee581a4f806, release everything under CC0 (Git LFS object)"
+
+[[file]]
+name = "cw-02"
+url = "https://media.githubusercontent.com/media/cwoffenden/CAD-projects/7ee581a4f8062c252468159595c8e6f8bf748309/sgi-onyx4-nameplate/cad/onyx4-nameplate.dwg"
+sha256 = "00a1f0f0e920797ef377d1b2ca4d5367356c7be5dcc6afda48b35088228c9783"
+version = "AC1032"
+features = ["custom_objects"]
+producer = "BricsCAD V25 (Teigha 25.9), sheet metal"
+license_note = "CC0-1.0 (cwoffenden/CAD-projects); the LICENSE and README at the repository root, commit 7ee581a4f806, release everything under CC0 (Git LFS object)"

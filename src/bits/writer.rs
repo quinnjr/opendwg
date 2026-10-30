@@ -11,8 +11,10 @@ use crate::error::{Error, Result};
 use crate::handle::HandleRef;
 use crate::version::Version;
 
+/// An [`Error::Encode`], whose message gets its own "cannot encode: "
+/// prefix from the error's display.
 fn unencodable(what: &str) -> Error {
-    Error::Encode(format!("cannot encode: {what}"))
+    Error::Encode(format!("bitstream: {what}"))
 }
 
 /// Writes DWG bit-coded primitives. Bits are MSB-first within each byte and
@@ -449,7 +451,7 @@ impl BitWriter {
         rgb_aci: u16,
         version: Version,
     ) -> Result<()> {
-        if rgb_aci > 0x01FF {
+        if matches!(color, Color::Rgb { .. }) && rgb_aci > 0x01FF {
             return Err(unencodable("an ENC color index is 9 bits"));
         }
         let aci = match color {
@@ -677,6 +679,36 @@ mod tests {
             )
             .is_err()
         );
+        // The message has one "cannot encode" prefix, the error's own.
+        let e = w.write_mc(1 << 62).unwrap_err().to_string();
+        assert_eq!(e.matches("cannot encode").count(), 1, "{e}");
+    }
+
+    /// The ACI index stored beside a true color is range checked; for other
+    /// colors it is ignored, as documented.
+    #[test]
+    fn enc_aci_is_checked_only_for_true_color() {
+        let mut w = BitWriter::new();
+        let rgb = Color::Rgb { r: 1, g: 2, b: 3 };
+        assert!(
+            w.write_enc_with_aci(&rgb, None, false, 0x200, Version::R2018)
+                .is_err()
+        );
+        assert!(
+            w.write_enc_with_aci(&rgb, None, false, 0x1FF, Version::R2018)
+                .is_ok()
+        );
+        for color in [Color::ByLayer, Color::ByBlock, Color::Index(7)] {
+            let mut ignored = BitWriter::new();
+            ignored
+                .write_enc_with_aci(&color, None, false, 0xFFFF, Version::R2018)
+                .unwrap();
+            let mut plain = BitWriter::new();
+            plain
+                .write_enc(&color, None, false, Version::R2018)
+                .unwrap();
+            assert_eq!(ignored.into_bytes(), plain.into_bytes(), "{color:?}");
+        }
     }
 
     #[test]
